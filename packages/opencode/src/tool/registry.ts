@@ -110,6 +110,10 @@ export const layer: Layer.Layer<
     const globtool = yield* GlobTool
     const writetool = yield* WriteTool
     const edit = yield* EditTool
+    const pinFile = yield* PinFileTool
+    const pinSection = yield* PinSectionTool
+    const unpin = yield* UnpinTool
+    const listPins = yield* ListPinsTool
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
@@ -201,6 +205,10 @@ export const layer: Layer.Layer<
           grep: Tool.init(greptool),
           edit: Tool.init(edit),
           write: Tool.init(writetool),
+          pinFile: Tool.init(pinFile),
+          pinSection: Tool.init(pinSection),
+          unpin: Tool.init(unpin),
+          listPins: Tool.init(listPins),
           task: Tool.init(task),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
@@ -223,6 +231,10 @@ export const layer: Layer.Layer<
             tool.grep,
             tool.edit,
             tool.write,
+            tool.pinFile,
+            tool.pinSection,
+            tool.unpin,
+            tool.listPins,
             tool.task,
             tool.fetch,
             tool.todo,

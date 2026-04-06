@@ -25,6 +25,7 @@ import { EffectBridge } from "@/effect/bridge"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { appendDebugDump } from "@/util/debug-dump"
+import { Pin } from "./pin"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -148,6 +149,21 @@ const live: Layer.Layer<
         system.push(header, rest.join("\n"))
       }
 
+      const tools = resolveTools(input)
+      const pinToolsAvailable =
+        Boolean(tools["pin_file"]) ||
+        Boolean(tools["pin_section"]) ||
+        Boolean(tools["list_pins"]) ||
+        Boolean(tools["unpin"])
+      if (pinToolsAvailable && system[0]) {
+        system[0] = [system[0], Pin.toolInstructions()].filter(Boolean).join("\n\n")
+      }
+
+      const pinnedSystemContext = yield* Effect.promise(() => Pin.renderSystemMessage(input.user.sessionID))
+      if (pinnedSystemContext) {
+        system.push(pinnedSystemContext)
+      }
+
       const variant =
         !input.small && input.model.variants && input.user.model.variant
           ? input.model.variants[input.user.model.variant]
@@ -212,8 +228,6 @@ const live: Layer.Layer<
           headers: {},
         },
       )
-
-      const tools = resolveTools(input)
 
       // LiteLLM and some Anthropic proxies require the tools parameter to be present
       // when message history contains tool calls, even if no tools are being used.
