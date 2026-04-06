@@ -17,6 +17,7 @@ import { Flag } from "@/flag/flag"
 import { Permission } from "@/permission"
 import { Auth } from "@/auth"
 import { Installation } from "@/installation"
+import { Pin } from "./pin"
 
 export namespace LLM {
   const log = Log.create({ service: "llm" })
@@ -98,6 +99,8 @@ export namespace LLM {
     // TODO: move this to a proper hook
     const isOpenaiOauth = provider.id === "openai" && auth?.type === "oauth"
 
+    const tools = await resolveTools(input)
+
     const system: string[] = []
     system.push(
       [
@@ -123,6 +126,17 @@ export namespace LLM {
       const rest = system.slice(1)
       system.length = 0
       system.push(header, rest.join("\n"))
+    }
+
+    const pinToolsAvailable =
+      Boolean(tools["pin_file"]) || Boolean(tools["pin_section"]) || Boolean(tools["list_pins"]) || Boolean(tools["unpin"])
+    if (pinToolsAvailable && system[0]) {
+      system[0] = [system[0], Pin.toolInstructions()].filter(Boolean).join("\n\n")
+    }
+
+    const pinnedContext = await Pin.renderSystemMessage(input.user.sessionID)
+    if (pinnedContext) {
+      system.push(pinnedContext)
     }
 
     const variant =
@@ -196,8 +210,6 @@ export namespace LLM {
       isOpenaiOauth || provider.id.includes("github-copilot")
         ? undefined
         : ProviderTransform.maxOutputTokens(input.model)
-
-    const tools = await resolveTools(input)
 
     // LiteLLM and some Anthropic proxies require the tools parameter to be present
     // when message history contains tool calls, even if no tools are being used.

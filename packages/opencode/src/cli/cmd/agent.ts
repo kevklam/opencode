@@ -14,7 +14,22 @@ import type { Argv } from "yargs"
 
 type AgentMode = "all" | "primary" | "subagent"
 
-const AVAILABLE_TOOLS = ["bash", "read", "write", "edit", "list", "glob", "grep", "webfetch", "task", "todowrite"]
+const AVAILABLE_TOOLS = [
+  "bash",
+  "read",
+  "write",
+  "edit",
+  "list",
+  "glob",
+  "grep",
+  "webfetch",
+  "task",
+  "todowrite",
+  "pin_file",
+  "pin_section",
+  "unpin",
+  "list_pins",
+]
 
 const AgentCreateCommand = cmd({
   command: "create",

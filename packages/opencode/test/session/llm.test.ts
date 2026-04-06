@@ -15,6 +15,8 @@ import { tmpdir } from "../fixture/fixture"
 import type { Agent } from "../../src/agent/agent"
 import type { MessageV2 } from "../../src/session/message-v2"
 import { SessionID, MessageID } from "../../src/session/schema"
+import { Session } from "../../src/session"
+import { Pin } from "../../src/session/pin"
 
 describe("session.llm.hasToolCalls", () => {
   test("returns false for empty messages array", () => {
@@ -381,6 +383,100 @@ describe("session.llm.stream", () => {
 
         const reasoning = (body.reasoningEffort as string | undefined) ?? (body.reasoning_effort as string | undefined)
         expect(reasoning).toBe("high")
+      },
+    })
+  })
+
+  test("injects pinned context before provider messages are built", async () => {
+    const server = state.server
+    if (!server) throw new Error("Server not initialized")
+
+    const providerID = "alibaba"
+    const modelID = "qwen-plus"
+    const fixture = await loadFixture(providerID, modelID)
+    const model = fixture.model
+
+    const request = waitRequest(
+      "/chat/completions",
+      new Response(createChatStream("Hello"), {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    )
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            enabled_providers: [providerID],
+            provider: {
+              [providerID]: {
+                options: {
+                  apiKey: "test-key",
+                  baseURL: `${server.url.origin}/v1`,
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const pinnedPath = path.join(tmp.path, "style.md")
+        await Bun.write(pinnedPath, "Keep the prose concrete and sensory.\n")
+
+        const resolved = await Provider.getModel(ProviderID.make(providerID), ModelID.make(model.id))
+        const session = await Session.create({})
+        Pin.pinFile({ sessionID: session.id, path: pinnedPath })
+
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+        const user = {
+          id: MessageID.make("user-pinned-context"),
+          sessionID: session.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderID.make(providerID), modelID: resolved.id },
+        } satisfies MessageV2.User
+
+        const stream = await LLM.stream({
+          user,
+          sessionID: session.id,
+          model: resolved,
+          agent,
+          system: ["You are a helpful assistant."],
+          abort: new AbortController().signal,
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {
+            pin_file: tool({
+              description: "pin",
+              inputSchema: z.object({}),
+              execute: async () => ({ output: "", title: "", metadata: {} }),
+            }),
+          },
+        })
+
+        for await (const _ of stream.fullStream) {
+        }
+
+        const capture = await request
+        const messages = capture.body.messages as Array<{ role: string; content: string }>
+        const systemMessages = messages.filter((message) => message.role === "system")
+        expect(systemMessages[0]?.content).toContain("Use pin_file or pin_section")
+        expect(systemMessages.some((message) => message.content.includes("Pinned context:"))).toBe(true)
+        expect(systemMessages.some((message) => message.content.includes("Keep the prose concrete and sensory."))).toBe(
+          true,
+        )
       },
     })
   })

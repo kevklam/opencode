@@ -94,6 +94,29 @@ export const TodoTable = sqliteTable(
   ],
 )
 
+export const PinTable = sqliteTable(
+  "pin",
+  {
+    session_id: text()
+      .$type<SessionID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    id: text().notNull(),
+    kind: text().notNull(),
+    path: text().notNull(),
+    start_line: integer(),
+    start_column: integer(),
+    end_line: integer(),
+    end_column: integer(),
+    position: integer().notNull(),
+    ...Timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.session_id, table.id] }),
+    index("pin_session_idx").on(table.session_id),
+  ],
+)
+
 export const PermissionTable = sqliteTable("permission", {
   project_id: text()
     .primaryKey()
