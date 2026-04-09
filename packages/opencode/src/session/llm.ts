@@ -49,6 +49,10 @@ function redactDebugValue(value: unknown): unknown {
   return redacted
 }
 
+function debugDumpPath(cfg: Config.Info) {
+  return Flag.OPENCODE_LLM_DEBUG_FILE ?? cfg.experimental?.llm_debug_dump_file
+}
+
 export type StreamInput = {
   user: MessageV2.User
   sessionID: string
@@ -115,6 +119,7 @@ const live: Layer.Layer<
 
       // TODO: move this to a proper hook
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
+      const llmDebugDumpFile = debugDumpPath(cfg)
 
       const system: string[] = []
       system.push(
@@ -413,7 +418,7 @@ const live: Layer.Layer<
                 if (args.type === "stream") {
                   // @ts-expect-error
                   args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options)
-                  if (Flag.OPENCODE_LLM_DEBUG_FILE) {
+                  if (llmDebugDumpFile) {
                     const request = redactDebugValue({
                       timestamp: new Date().toISOString(),
                       sessionID: input.sessionID,
@@ -431,7 +436,7 @@ const live: Layer.Layer<
                       messages: args.params.prompt,
                       headers: args.params.headers,
                     })
-                    await appendDebugDump(request, Flag.OPENCODE_LLM_DEBUG_FILE).catch((error) =>
+                    await appendDebugDump(request, llmDebugDumpFile).catch((error) =>
                       l.warn("failed to write llm debug dump", { error }),
                     )
                   }

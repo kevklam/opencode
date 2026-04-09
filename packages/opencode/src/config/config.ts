@@ -254,6 +254,9 @@ export const Info = Schema.Struct({
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
+      llm_debug_dump_file: Schema.optional(Schema.String).annotate({
+        description: "File path to append redacted downstream LLM request dumps as NDJSON",
+      }),
     }),
   ),
 })
