@@ -24,6 +24,7 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { EffectBridge } from "@/effect/bridge"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
+import { appendDebugDump } from "@/util/debug-dump"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -32,6 +33,21 @@ type Result = Awaited<ReturnType<typeof streamText>>
 // Avoid re-instantiating remeda's deep merge types in this hot LLM path; the runtime behavior is still mergeDeep.
 const mergeOptions = (target: Record<string, any>, source: Record<string, any> | undefined): Record<string, any> =>
   mergeDeep(target, source ?? {}) as Record<string, any>
+
+function redactDebugValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactDebugValue)
+  if (!value || typeof value !== "object") return value
+
+  const redacted: Record<string, unknown> = {}
+  for (const [key, nested] of Object.entries(value)) {
+    if (/(authorization|api[-_]?key|token|secret|password|cookie)/i.test(key)) {
+      redacted[key] = "[REDACTED]"
+      continue
+    }
+    redacted[key] = redactDebugValue(nested)
+  }
+  return redacted
+}
 
 export type StreamInput = {
   user: MessageV2.User
@@ -397,6 +413,28 @@ const live: Layer.Layer<
                 if (args.type === "stream") {
                   // @ts-expect-error
                   args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options)
+                  if (Flag.OPENCODE_LLM_DEBUG_FILE) {
+                    const request = redactDebugValue({
+                      timestamp: new Date().toISOString(),
+                      sessionID: input.sessionID,
+                      requestID: input.user.id,
+                      providerID: input.model.providerID,
+                      modelID: input.model.id,
+                      apiModelID: input.model.api.id,
+                      temperature: params.temperature,
+                      topP: params.topP,
+                      topK: params.topK,
+                      maxOutputTokens: params.maxOutputTokens,
+                      toolChoice: input.toolChoice,
+                      activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
+                      providerOptions: ProviderTransform.providerOptions(input.model, params.options),
+                      messages: args.params.prompt,
+                      headers: args.params.headers,
+                    })
+                    await appendDebugDump(request, Flag.OPENCODE_LLM_DEBUG_FILE).catch((error) =>
+                      l.warn("failed to write llm debug dump", { error }),
+                    )
+                  }
                 }
                 return args.params
               },
