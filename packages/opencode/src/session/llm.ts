@@ -18,10 +18,30 @@ import { Permission } from "@/permission"
 import { Auth } from "@/auth"
 import { Installation } from "@/installation"
 import { Pin } from "./pin"
+import { appendDebugDump } from "@/util/debug-dump"
 
 export namespace LLM {
   const log = Log.create({ service: "llm" })
   export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
+
+  function redactDebugValue(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map(redactDebugValue)
+    }
+    if (!value || typeof value !== "object") {
+      return value
+    }
+
+    const redacted: Record<string, unknown> = {}
+    for (const [key, nested] of Object.entries(value)) {
+      if (/(authorization|api[-_]?key|token|secret|password|cookie)/i.test(key)) {
+        redacted[key] = "[REDACTED]"
+        continue
+      }
+      redacted[key] = redactDebugValue(nested)
+    }
+    return redacted
+  }
 
   export type StreamInput = {
     user: MessageV2.User
@@ -329,6 +349,41 @@ export namespace LLM {
               if (args.type === "stream") {
                 // @ts-expect-error
                 args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options)
+                const request = redactDebugValue({
+                  timestamp: new Date().toISOString(),
+                  sessionID: input.sessionID,
+                  requestID: input.user.id,
+                  providerID: input.model.providerID,
+                  modelID: input.model.id,
+                  apiModelID: input.model.api.id,
+                  temperature: params.temperature,
+                  topP: params.topP,
+                  topK: params.topK,
+                  maxOutputTokens,
+                  toolChoice: input.toolChoice,
+                  activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
+                  providerOptions: ProviderTransform.providerOptions(input.model, params.options),
+                  headers: {
+                    ...(input.model.providerID.startsWith("opencode")
+                      ? {
+                          "x-opencode-project": Instance.project.id,
+                          "x-opencode-session": input.sessionID,
+                          "x-opencode-request": input.user.id,
+                          "x-opencode-client": Flag.OPENCODE_CLIENT,
+                        }
+                      : {
+                          "User-Agent": `opencode/${Installation.VERSION}`,
+                        }),
+                    ...input.model.headers,
+                    ...headers,
+                  },
+                  params: args.params,
+                })
+                if (Flag.OPENCODE_LLM_DEBUG_FILE) {
+                  await appendDebugDump(request, Flag.OPENCODE_LLM_DEBUG_FILE).catch((error) =>
+                    l.warn("failed to write llm debug dump", { error }),
+                  )
+                }
               }
               return args.params
             },
