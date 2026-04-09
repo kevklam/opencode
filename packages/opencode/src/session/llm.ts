@@ -96,6 +96,10 @@ export namespace LLM {
 
   export const defaultLayer = layer
 
+  function debugDumpPath(cfg: Awaited<ReturnType<typeof Config.get>>) {
+    return Flag.OPENCODE_LLM_DEBUG_FILE ?? cfg.experimental?.llm_debug_dump_file
+  }
+
   export async function stream(input: StreamRequest) {
     const l = log
       .clone()
@@ -115,6 +119,7 @@ export namespace LLM {
       Provider.getProvider(input.model.providerID),
       Auth.get(input.model.providerID),
     ])
+    const llmDebugDumpFile = debugDumpPath(cfg)
     // TODO: move this to a proper hook
     const isOpenaiOauth = provider.id === "openai" && auth?.type === "oauth"
 
@@ -367,8 +372,8 @@ export namespace LLM {
                   },
                   params: args.params,
                 })
-                if (Flag.OPENCODE_LLM_DEBUG_FILE) {
-                  await appendDebugDump(request, Flag.OPENCODE_LLM_DEBUG_FILE).catch((error) =>
+                if (llmDebugDumpFile) {
+                  await appendDebugDump(request, llmDebugDumpFile).catch((error) =>
                     l.warn("failed to write llm debug dump", { error }),
                   )
                 }
