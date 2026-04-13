@@ -160,6 +160,15 @@ export namespace ACP {
       this.startEventSubscription()
     }
 
+    private getForkMessageID(params: ForkSessionRequest): string | undefined {
+      const meta = params._meta
+      if (!meta || typeof meta !== "object") return undefined
+      const opencode = meta["opencode"]
+      if (!opencode || typeof opencode !== "object") return undefined
+      const forkMessageId = (opencode as Record<string, unknown>)["forkMessageId"]
+      return typeof forkMessageId === "string" && forkMessageId.length > 0 ? forkMessageId : undefined
+    }
+
     private startPinSubscription() {
       if (this.pinUnsubscribe) return
       this.pinUnsubscribe = Bus.subscribe(Pin.Event.Updated, (event) => {
@@ -504,11 +513,12 @@ export namespace ACP {
                 sessionId,
                 update: {
                   sessionUpdate: "agent_message_chunk",
+                  messageId: message.info.id,
                   content: {
                     type: "text",
                     text: props.delta,
                   },
-                },
+                } as any,
               })
               .catch((error) => {
                 log.error("failed to send text delta to ACP", { error })
@@ -735,6 +745,7 @@ export namespace ACP {
     async unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
       const directory = params.cwd
       const mcpServers = params.mcpServers ?? []
+      const forkMessageID = this.getForkMessageID(params)
 
       try {
         const model = await defaultModel(this.config, directory)
@@ -744,6 +755,7 @@ export namespace ACP {
             {
               sessionID: params.sessionId,
               directory,
+              ...(forkMessageID ? { messageID: forkMessageID } : {}),
             },
             { throwOnError: true },
           )
@@ -756,7 +768,11 @@ export namespace ACP {
         const sessionId = forked.id
         await this.sessionManager.load(sessionId, directory, mcpServers, model)
 
-        log.info("fork_session", { sessionId, mcpServers: mcpServers.length })
+        log.info("fork_session", {
+          sessionId,
+          mcpServers: mcpServers.length,
+          forkMessageID,
+        })
 
         const mode = await this.loadSessionMode({
           cwd: directory,
@@ -991,12 +1007,13 @@ export namespace ACP {
                 sessionId,
                 update: {
                   sessionUpdate: message.info.role === "user" ? "user_message_chunk" : "agent_message_chunk",
+                  messageId: message.info.id,
                   content: {
                     type: "text",
                     text: part.text,
                     ...(audience && { annotations: { audience } }),
                   },
-                },
+                } as any,
               })
               .catch((err) => {
                 log.error("failed to send text to ACP", { error: err })
@@ -1022,8 +1039,9 @@ export namespace ACP {
                 sessionId,
                 update: {
                   sessionUpdate: messageChunk,
+                  messageId: message.info.id,
                   content: { type: "resource_link", uri: url, name: filename, mimeType: mime },
-                },
+                } as any,
               })
               .catch((err) => {
                 log.error("failed to send resource_link to ACP", { error: err })
@@ -1043,13 +1061,14 @@ export namespace ACP {
                   sessionId,
                   update: {
                     sessionUpdate: messageChunk,
+                    messageId: message.info.id,
                     content: {
                       type: "image",
                       mimeType: effectiveMime,
                       data: base64Data,
                       uri: pathToFileURL(filename).href,
                     },
-                  },
+                  } as any,
                 })
                 .catch((err) => {
                   log.error("failed to send image to ACP", { error: err })
@@ -1071,8 +1090,9 @@ export namespace ACP {
                   sessionId,
                   update: {
                     sessionUpdate: messageChunk,
+                    messageId: message.info.id,
                     content: { type: "resource", resource },
-                  },
+                  } as any,
                 })
                 .catch((err) => {
                   log.error("failed to send resource to ACP", { error: err })
