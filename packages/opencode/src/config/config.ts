@@ -257,6 +257,9 @@ export const Info = Schema.Struct({
       llm_debug_dump_file: Schema.optional(Schema.String).annotate({
         description: "File path to append redacted downstream LLM request dumps as NDJSON",
       }),
+      pin_context_injection: Schema.optional(Schema.Literals(["system", "user"])).annotate({
+        description: "How pinned context is injected into the prompt (default: system)",
+      }),
     }),
   ),
 })

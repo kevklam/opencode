@@ -54,6 +54,16 @@ function debugDumpPath(cfg: Config.Info) {
   return Flag.OPENCODE_LLM_DEBUG_FILE ?? cfg.experimental?.llm_debug_dump_file
 }
 
+function injectPinnedUserContext(messages: ModelMessage[], content: string): ModelMessage[] {
+  const pinnedMessage: ModelMessage = {
+    role: "user",
+    content,
+  }
+  const latestUserIndex = [...messages].map((message) => message.role).lastIndexOf("user")
+  if (latestUserIndex === -1) return [...messages, pinnedMessage]
+  return [...messages.slice(0, latestUserIndex), pinnedMessage, ...messages.slice(latestUserIndex)]
+}
+
 export type StreamInput = {
   user: MessageV2.User
   sessionID: string
@@ -159,10 +169,19 @@ const live: Layer.Layer<
         system[0] = [system[0], Pin.toolInstructions()].filter(Boolean).join("\n\n")
       }
 
-      const pinnedSystemContext = yield* Effect.promise(() => Pin.renderSystemMessage(input.user.sessionID))
+      const pinContextInjection = cfg.experimental?.pin_context_injection ?? "system"
+      const pinnedSystemContext =
+        pinContextInjection === "system"
+          ? yield* Effect.promise(() => Pin.renderSystemMessage(input.user.sessionID))
+          : undefined
       if (pinnedSystemContext) {
         system.push(pinnedSystemContext)
       }
+      const pinnedUserContext =
+        pinContextInjection === "user"
+          ? yield* Effect.promise(() => Pin.renderUserMessage(input.user.sessionID))
+          : undefined
+      const inputMessages = pinnedUserContext ? injectPinnedUserContext(input.messages, pinnedUserContext) : input.messages
 
       const variant =
         !input.small && input.model.variants && input.user.model.variant
@@ -182,9 +201,9 @@ const live: Layer.Layer<
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
       const messages = isOpenaiOauth
-        ? input.messages
+        ? inputMessages
         : isWorkflow
-          ? input.messages
+          ? inputMessages
           : [
               ...system.map(
                 (x): ModelMessage => ({
@@ -192,7 +211,7 @@ const live: Layer.Layer<
                   content: x,
                 }),
               ),
-              ...input.messages,
+              ...inputMessages,
             ]
 
       const params = yield* plugin.trigger(

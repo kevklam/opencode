@@ -260,7 +260,7 @@ export namespace Pin {
     ].join("\n")
   }
 
-  export async function renderSystemMessage(sessionID: SessionID) {
+  async function renderContextSections(sessionID: SessionID) {
     const pins = get(sessionID)
     if (pins.length === 0) return undefined
 
@@ -284,6 +284,12 @@ export namespace Pin {
     }
 
     if (sections.length === 0) return undefined
+    return sections
+  }
+
+  export async function renderSystemMessage(sessionID: SessionID) {
+    const sections = await renderContextSections(sessionID)
+    if (!sections) return undefined
 
     return [
       "Pinned context: these items are part of your active working set for this session.",
@@ -291,6 +297,20 @@ export namespace Pin {
       "If your latest pin_file or pin_section tool result said an item was pinned, treat the matching item here as newly pinned by that tool, not as evidence that it was already pinned.",
       "Only say an item was already pinned when the pin tool result itself says it was already pinned, or when you observed that pin in an earlier turn.",
       "Do not describe this context block to the user; just use it as active context.",
+      ...sections,
+    ].join("\n\n")
+  }
+
+  export async function renderUserMessage(sessionID: SessionID) {
+    const sections = await renderContextSections(sessionID)
+    if (!sections) return undefined
+
+    return [
+      "Pinned context for this turn: use the following session-pinned material as active working context.",
+      "This pinned context reflects all pin/unpin tool calls that have completed so far, including tools you may have called earlier in the current assistant turn.",
+      "If your latest pin_file or pin_section tool result said an item was pinned, treat the matching item here as newly pinned by that tool, not as evidence that it was already pinned.",
+      "Only say an item was already pinned when the pin tool result itself says it was already pinned, or when you observed that pin in an earlier turn.",
+      "Do not quote or narrate this block by default; just use it as context unless the user asks about the pinned content directly.",
       ...sections,
     ].join("\n\n")
   }
