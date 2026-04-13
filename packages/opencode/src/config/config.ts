@@ -974,6 +974,10 @@ export namespace Config {
             .optional()
             .describe("Tools that should only be available to primary agents."),
           continue_loop_on_deny: z.boolean().optional().describe("Continue the agent loop when a tool call is denied"),
+          pin_context_injection: z
+            .enum(["system", "user"])
+            .optional()
+            .describe("How pinned context is injected into the prompt (default: system)"),
           llm_debug_dump_file: z
             .string()
             .optional()

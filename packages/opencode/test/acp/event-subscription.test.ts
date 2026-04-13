@@ -4,6 +4,9 @@ import type { AgentSideConnection } from "@agentclientprotocol/sdk"
 import type { Event, EventMessagePartUpdated, ToolStatePending, ToolStateRunning } from "@opencode-ai/sdk/v2"
 import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
+import { Session } from "../../src/session"
+import { Pin } from "../../src/session/pin"
+import path from "path"
 
 type SessionUpdateParams = Parameters<AgentSideConnection["sessionUpdate"]>[0]
 type RequestPermissionParams = Parameters<AgentSideConnection["requestPermission"]>[0]
@@ -123,6 +126,7 @@ function createFakeAgent() {
   const updates = new Map<string, string[]>()
   const chunks = new Map<string, string>()
   const sessionUpdates: SessionUpdateParams[] = []
+  const extNotifications: Array<{ method: string; params: unknown }> = []
   const record = (sessionId: string, type: string) => {
     const list = updates.get(sessionId) ?? []
     list.push(type)
@@ -144,6 +148,9 @@ function createFakeAgent() {
     },
     async requestPermission(_params: RequestPermissionParams): Promise<RequestPermissionResult> {
       return { outcome: { outcome: "selected", optionId: "once" } } as RequestPermissionResult
+    },
+    async extNotification(method: string, params: unknown) {
+      extNotifications.push({ method, params })
     },
   } as unknown as AgentSideConnection
 
@@ -256,7 +263,7 @@ function createFakeAgent() {
     ;(agent as any).eventAbort.abort()
   }
 
-  return { agent, controller, calls, updates, chunks, sessionUpdates, stop, sdk, connection }
+  return { agent, controller, calls, updates, chunks, sessionUpdates, extNotifications, stop, sdk, connection }
 }
 
 describe("acp.agent event subscription", () => {
@@ -363,6 +370,32 @@ describe("acp.agent event subscription", () => {
         await agent.loadSession({ sessionId, cwd, mcpServers: [] } as any)
 
         expect(calls.eventSubscribe).toBe(1)
+
+        stop()
+      },
+    })
+  })
+
+  test("emits pin change notifications from core pin events", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { extNotifications, stop } = createFakeAgent()
+        const session = await Session.create({})
+        const filepath = path.join(tmp.path, "context.md")
+        await Bun.write(filepath, "Pinned from core event\n")
+
+        const { pinID } = Pin.pinFile({ sessionID: session.id, path: filepath })
+        await new Promise((r) => setTimeout(r, 20))
+
+        expect(extNotifications).toContainEqual({
+          method: "_goose/pins/changed",
+          params: {
+            sessionId: session.id,
+            pins: [{ id: pinID, kind: "file", path: filepath }],
+          },
+        })
 
         stop()
       },

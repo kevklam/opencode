@@ -17,6 +17,7 @@ import { Flag } from "@/flag/flag"
 import { Permission } from "@/permission"
 import { Auth } from "@/auth"
 import { Installation } from "@/installation"
+import { Pin } from "./pin"
 import { appendDebugDump } from "@/util/debug-dump"
 
 export namespace LLM {
@@ -96,6 +97,15 @@ export namespace LLM {
 
   export const defaultLayer = layer
 
+  function injectPinnedUserContext(messages: ModelMessage[], content: string): ModelMessage[] {
+    const pinnedMessage: ModelMessage = {
+      role: "user",
+      content,
+    }
+    const latestUserIndex = [...messages].map((message) => message.role).lastIndexOf("user")
+    if (latestUserIndex === -1) return [...messages, pinnedMessage]
+    return [...messages.slice(0, latestUserIndex), pinnedMessage, ...messages.slice(latestUserIndex)]
+  }
   function debugDumpPath(cfg: Awaited<ReturnType<typeof Config.get>>) {
     return Flag.OPENCODE_LLM_DEBUG_FILE ?? cfg.experimental?.llm_debug_dump_file
   }
@@ -122,6 +132,8 @@ export namespace LLM {
     const llmDebugDumpFile = debugDumpPath(cfg)
     // TODO: move this to a proper hook
     const isOpenaiOauth = provider.id === "openai" && auth?.type === "oauth"
+
+    const tools = await resolveTools(input)
 
     const system: string[] = []
     system.push(
@@ -150,6 +162,24 @@ export namespace LLM {
       system.push(header, rest.join("\n"))
     }
 
+    const pinToolsAvailable =
+      Boolean(tools["pin_file"]) || Boolean(tools["pin_section"]) || Boolean(tools["list_pins"]) || Boolean(tools["unpin"])
+    if (pinToolsAvailable && system[0]) {
+      system[0] = [system[0], Pin.toolInstructions()].filter(Boolean).join("\n\n")
+    }
+
+    const pinContextInjection = cfg.experimental?.pin_context_injection ?? "system"
+    const pinnedSystemContext =
+      pinContextInjection === "system" ? await Pin.renderSystemMessage(input.user.sessionID) : undefined
+    if (pinnedSystemContext) {
+      system.push(pinnedSystemContext)
+    }
+
+    const pinnedUserContext =
+      pinContextInjection === "user" ? await Pin.renderUserMessage(input.user.sessionID) : undefined
+
+    const inputMessages = pinnedUserContext ? injectPinnedUserContext(input.messages, pinnedUserContext) : input.messages
+
     const variant =
       !input.small && input.model.variants && input.user.variant ? input.model.variants[input.user.variant] : {}
     const base = input.small
@@ -171,9 +201,9 @@ export namespace LLM {
 
     const isWorkflow = language instanceof GitLabWorkflowLanguageModel
     const messages = isOpenaiOauth
-      ? input.messages
+      ? inputMessages
       : isWorkflow
-        ? input.messages
+        ? inputMessages
         : [
             ...system.map(
               (x): ModelMessage => ({
@@ -181,7 +211,7 @@ export namespace LLM {
                 content: x,
               }),
             ),
-            ...input.messages,
+            ...inputMessages,
           ]
 
     const params = await Plugin.trigger(
@@ -222,8 +252,6 @@ export namespace LLM {
         ? undefined
         : ProviderTransform.maxOutputTokens(input.model)
 
-    const tools = await resolveTools(input)
-
     // LiteLLM and some Anthropic proxies require the tools parameter to be present
     // when message history contains tool calls, even if no tools are being used.
     // Add a dummy tool that is never called to satisfy this validation.
@@ -239,7 +267,7 @@ export namespace LLM {
     // calls but no tools param is present. When there are no active tools (e.g.
     // during compaction), inject a stub tool to satisfy the validation requirement.
     // The stub description explicitly tells the model not to call it.
-    if (isLiteLLMProxy && Object.keys(tools).length === 0 && hasToolCalls(input.messages)) {
+    if (isLiteLLMProxy && Object.keys(tools).length === 0 && hasToolCalls(inputMessages)) {
       tools["_noop"] = tool({
         description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
         inputSchema: jsonSchema({
@@ -266,7 +294,7 @@ export namespace LLM {
         try {
           const result = await t.execute!(JSON.parse(argsJson), {
             toolCallId: _requestID,
-            messages: input.messages,
+            messages: inputMessages,
             abortSignal: input.abort,
           })
           const output = typeof result === "string" ? result : (result?.output ?? JSON.stringify(result))

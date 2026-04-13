@@ -38,9 +38,12 @@ import { Provider } from "../provider/provider"
 import { ModelID, ProviderID } from "../provider/schema"
 import { Agent as AgentModule } from "../agent/agent"
 import { Installation } from "@/installation"
+import { Bus } from "@/bus"
 import { MessageV2 } from "@/session/message-v2"
+import { SessionID } from "@/session/schema"
 import { Config } from "@/config/config"
 import { Todo } from "@/session/todo"
+import { Pin } from "@/session/pin"
 import { z } from "zod"
 import { LoadAPIKeyError } from "ai"
 import type { AssistantMessage, Event, OpencodeClient, SessionMessageResponse, ToolPart } from "@opencode-ai/sdk/v2"
@@ -140,6 +143,7 @@ export namespace ACP {
     private eventStarted = false
     private bashSnapshots = new Map<string, string>()
     private toolStarts = new Set<string>()
+    private pinUnsubscribe?: () => void
     private permissionQueues = new Map<string, Promise<void>>()
     private permissionOptions: PermissionOption[] = [
       { optionId: "once", kind: "allow_once", name: "Allow once" },
@@ -152,7 +156,22 @@ export namespace ACP {
       this.config = config
       this.sdk = config.sdk
       this.sessionManager = new ACPSessionManager(this.sdk)
+      this.startPinSubscription()
       this.startEventSubscription()
+    }
+
+    private startPinSubscription() {
+      if (this.pinUnsubscribe) return
+      this.pinUnsubscribe = Bus.subscribe(Pin.Event.Updated, (event) => {
+        this.connection
+          .extNotification("_goose/pins/changed", {
+            sessionId: event.properties.sessionID,
+            pins: event.properties.pins,
+          })
+          .catch((error) => {
+            log.error("failed to send pin change notification", { error })
+          })
+      })
     }
 
     private startEventSubscription() {
@@ -413,6 +432,7 @@ export namespace ACP {
                   .catch((error) => {
                     log.error("failed to send tool completed to ACP", { error })
                   })
+
                 return
               }
               case "error":
@@ -514,6 +534,7 @@ export namespace ACP {
           }
           return
         }
+
       }
     }
 
@@ -1246,7 +1267,8 @@ export namespace ACP {
           availableModels,
         },
         modes,
-        _meta: buildVariantMeta({
+        _meta: buildSessionMeta({
+          sessionID: sessionId,
           model,
           variant: this.sessionManager.getVariant(sessionId),
           availableVariants,
@@ -1268,7 +1290,8 @@ export namespace ACP {
       const availableVariants = modelVariantsFromProviders(entries, selection.model)
 
       return {
-        _meta: buildVariantMeta({
+        _meta: buildSessionMeta({
+          sessionID: params.sessionId,
           model: selection.model,
           variant: selection.variant,
           availableVariants,
@@ -1695,12 +1718,16 @@ export namespace ACP {
     return `${base}/${variant}`
   }
 
-  function buildVariantMeta(input: {
+  function buildSessionMeta(input: {
+    sessionID: string
     model: { providerID: ProviderID; modelID: ModelID }
     variant?: string
     availableVariants: string[]
   }) {
     return {
+      goose: {
+        pins: Pin.list(SessionID.make(input.sessionID)),
+      },
       opencode: {
         modelId: `${input.model.providerID}/${input.model.modelID}`,
         variant: input.variant ?? null,
