@@ -162,6 +162,15 @@ export class Agent implements ACPAgent {
     this.startEventSubscription()
   }
 
+  private getForkMessageID(params: ForkSessionRequest): string | undefined {
+    const meta = params._meta
+    if (!meta || typeof meta !== "object") return undefined
+    const opencode = meta["opencode"]
+    if (!opencode || typeof opencode !== "object") return undefined
+    const forkMessageId = (opencode as Record<string, unknown>)["forkMessageId"]
+    return typeof forkMessageId === "string" && forkMessageId.length > 0 ? forkMessageId : undefined
+  }
+
   private startEventSubscription() {
     if (this.eventStarted) return
     this.eventStarted = true
@@ -735,6 +744,7 @@ export class Agent implements ACPAgent {
   async unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
     const directory = params.cwd
     const mcpServers = params.mcpServers ?? []
+    const forkMessageID = this.getForkMessageID(params)
 
     try {
       const model = await defaultModel(this.config, directory)
@@ -744,6 +754,7 @@ export class Agent implements ACPAgent {
           {
             sessionID: params.sessionId,
             directory,
+            ...(forkMessageID ? { messageID: forkMessageID } : {}),
           },
           { throwOnError: true },
         )
@@ -756,7 +767,11 @@ export class Agent implements ACPAgent {
       const sessionId = forked.id
       await this.sessionManager.load(sessionId, directory, mcpServers, model)
 
-      log.info("fork_session", { sessionId, mcpServers: mcpServers.length })
+      log.info("fork_session", {
+        sessionId,
+        mcpServers: mcpServers.length,
+        forkMessageID,
+      })
 
       const mode = await this.loadSessionMode({
         cwd: directory,
