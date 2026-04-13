@@ -97,6 +97,15 @@ export namespace LLM {
 
   export const defaultLayer = layer
 
+  function injectPinnedUserContext(messages: ModelMessage[], content: string): ModelMessage[] {
+    const pinnedMessage: ModelMessage = {
+      role: "user",
+      content,
+    }
+    const latestUserIndex = [...messages].map((message) => message.role).lastIndexOf("user")
+    if (latestUserIndex === -1) return [...messages, pinnedMessage]
+    return [...messages.slice(0, latestUserIndex), pinnedMessage, ...messages.slice(latestUserIndex)]
+  }
   function debugDumpPath(cfg: Awaited<ReturnType<typeof Config.get>>) {
     return Flag.OPENCODE_LLM_DEBUG_FILE ?? cfg.experimental?.llm_debug_dump_file
   }
@@ -159,10 +168,17 @@ export namespace LLM {
       system[0] = [system[0], Pin.toolInstructions()].filter(Boolean).join("\n\n")
     }
 
-    const pinnedContext = await Pin.renderSystemMessage(input.user.sessionID)
-    if (pinnedContext) {
-      system.push(pinnedContext)
+    const pinContextInjection = cfg.experimental?.pin_context_injection ?? "system"
+    const pinnedSystemContext =
+      pinContextInjection === "system" ? await Pin.renderSystemMessage(input.user.sessionID) : undefined
+    if (pinnedSystemContext) {
+      system.push(pinnedSystemContext)
     }
+
+    const pinnedUserContext =
+      pinContextInjection === "user" ? await Pin.renderUserMessage(input.user.sessionID) : undefined
+
+    const inputMessages = pinnedUserContext ? injectPinnedUserContext(input.messages, pinnedUserContext) : input.messages
 
     const variant =
       !input.small && input.model.variants && input.user.variant ? input.model.variants[input.user.variant] : {}
@@ -185,9 +201,9 @@ export namespace LLM {
 
     const isWorkflow = language instanceof GitLabWorkflowLanguageModel
     const messages = isOpenaiOauth
-      ? input.messages
+      ? inputMessages
       : isWorkflow
-        ? input.messages
+        ? inputMessages
         : [
             ...system.map(
               (x): ModelMessage => ({
@@ -195,7 +211,7 @@ export namespace LLM {
                 content: x,
               }),
             ),
-            ...input.messages,
+            ...inputMessages,
           ]
 
     const params = await Plugin.trigger(
@@ -251,7 +267,7 @@ export namespace LLM {
     // calls but no tools param is present. When there are no active tools (e.g.
     // during compaction), inject a stub tool to satisfy the validation requirement.
     // The stub description explicitly tells the model not to call it.
-    if (isLiteLLMProxy && Object.keys(tools).length === 0 && hasToolCalls(input.messages)) {
+    if (isLiteLLMProxy && Object.keys(tools).length === 0 && hasToolCalls(inputMessages)) {
       tools["_noop"] = tool({
         description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
         inputSchema: jsonSchema({
@@ -278,7 +294,7 @@ export namespace LLM {
         try {
           const result = await t.execute!(JSON.parse(argsJson), {
             toolCallId: _requestID,
-            messages: input.messages,
+            messages: inputMessages,
             abortSignal: input.abort,
           })
           const output = typeof result === "string" ? result : (result?.output ?? JSON.stringify(result))
