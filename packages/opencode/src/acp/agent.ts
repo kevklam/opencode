@@ -409,7 +409,7 @@ export class Agent implements ACPAgent {
                     status: "completed",
                     kind,
                     content,
-                    title: part.state.title,
+                    title: formatToolCallTitle(part.tool, part.state.title),
                     rawInput: part.state.input,
                     rawOutput: {
                       output: part.state.output,
@@ -938,7 +938,7 @@ export class Agent implements ACPAgent {
                   status: "completed",
                   kind,
                   content,
-                  title: part.state.title,
+                  title: formatToolCallTitle(part.tool, part.state.title),
                   rawInput: part.state.input,
                   rawOutput: {
                     output: part.state.output,
@@ -1575,6 +1575,12 @@ function toToolKind(toolName: string): ToolKind {
     default:
       return "other"
   }
+}
+
+function formatToolCallTitle(toolName: string, title?: string) {
+  const normalized = title?.trim()
+  if (!normalized || normalized === toolName) return toolName
+  return `${toolName} - ${normalized}`
 }
 
 function toLocations(toolName: string, input: Record<string, any>): { path: string }[] {
