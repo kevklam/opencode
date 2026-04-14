@@ -43,6 +43,9 @@ import { Agent as AgentModule } from "../agent/agent"
 import { AppRuntime } from "@/effect/app-runtime"
 import { Installation } from "@/installation"
 import { MessageV2 } from "@/session/message-v2"
+import { Session } from "@/session/session"
+import { SessionID } from "@/session/schema"
+import { SessionRevert } from "@/session/revert"
 import { Config } from "@/config/config"
 import { ConfigMCP } from "@/config/mcp"
 import { Todo } from "@/session/todo"
@@ -55,6 +58,10 @@ import { ShellID } from "@/tool/shell/id"
 
 type ModeOption = { id: string; name: string; description?: string }
 type ModelOption = { modelId: string; name: string }
+type DeleteSessionRequest = { sessionId: string }
+type DeleteSessionResponse = { sessionId: string }
+type RevertSessionRequest = { sessionId: string; messageId: string }
+type RevertSessionResponse = { sessionId: string; messageId: string }
 const decodeTodos = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Array(Todo.Info)))
 
 const DEFAULT_VARIANT_VALUE = "default"
@@ -591,6 +598,17 @@ export class Agent implements ACPAgent {
     throw new Error("Authentication not implemented")
   }
 
+  async extMethod(method: string, params: Record<string, unknown>) {
+    switch (method) {
+      case "_opencode/session/delete":
+        return this["_opencode/session/delete"](params as DeleteSessionRequest)
+      case "_opencode/session/revert":
+        return this["_opencode/session/revert"](params as RevertSessionRequest)
+      default:
+        throw RequestError.methodNotFound(method)
+    }
+  }
+
   async newSession(params: NewSessionRequest) {
     const directory = params.cwd
     try {
@@ -841,6 +859,53 @@ export class Agent implements ACPAgent {
       }
       throw e
     }
+  }
+
+  async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+    return this.listSessions(params)
+  }
+
+  async ["_opencode/session/delete"](params: DeleteSessionRequest): Promise<DeleteSessionResponse> {
+    const session = this.sessionManager.get(params.sessionId)
+    await this.sdk.session.delete(
+      {
+        sessionID: params.sessionId,
+        directory: session.cwd,
+      },
+      { throwOnError: true },
+    )
+    this.sessionManager.remove(params.sessionId)
+    return { sessionId: params.sessionId }
+  }
+
+  async ["_opencode/session/revert"](params: RevertSessionRequest): Promise<RevertSessionResponse> {
+    const session = this.sessionManager.get(params.sessionId)
+    const messages = await this.sdk.session
+      .messages(
+        {
+          sessionID: params.sessionId,
+          directory: session.cwd,
+        },
+        { throwOnError: true },
+      )
+      .then((x) => x.data ?? [])
+
+    const targetExists = messages.some((message) => message.info.id === params.messageId)
+    if (!targetExists) {
+      throw new Error(`Message not found for revert: ${params.messageId}`)
+    }
+
+    await this.sdk.session.revert(
+      {
+        sessionID: params.sessionId,
+        directory: session.cwd,
+        messageID: params.messageId,
+      },
+      { throwOnError: true },
+    )
+    const reverted = await AppRuntime.runPromise(Session.Service.use((svc) => svc.get(SessionID.make(params.sessionId))))
+    await AppRuntime.runPromise(SessionRevert.Service.use((svc) => svc.cleanup(reverted)))
+    return { sessionId: params.sessionId, messageId: params.messageId }
   }
 
   private async processMessage(message: SessionMessageResponse) {
