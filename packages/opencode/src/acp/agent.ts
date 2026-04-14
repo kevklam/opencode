@@ -57,6 +57,13 @@ type DeleteSessionRequest = { sessionId: string }
 type DeleteSessionResponse = { sessionId: string }
 type RevertSessionRequest = { sessionId: string; messageId: string }
 type RevertSessionResponse = { sessionId: string; messageId: string }
+type RetrySessionRequest = { sessionId: string; messageId: string }
+type RetrySessionResponse = {
+  sessionId: string
+  sourceMessageId: string
+  retriedUserMessageId: string
+  stopReason: "end_turn" | "cancelled"
+}
 
 const DEFAULT_VARIANT_VALUE = "default"
 
@@ -610,6 +617,8 @@ export namespace ACP {
           return this["_opencode/session/delete"](params as DeleteSessionRequest)
         case "_opencode/session/revert":
           return this["_opencode/session/revert"](params as RevertSessionRequest)
+        case "_opencode/session/retry":
+          return this["_opencode/session/retry"](params as RetrySessionRequest)
         default:
           throw RequestError.methodNotFound(method)
       }
@@ -906,6 +915,108 @@ export namespace ACP {
       const reverted = await Session.get(SessionID.make(params.sessionId))
       await SessionRevert.cleanup(reverted)
       return { sessionId: params.sessionId, messageId: params.messageId }
+    }
+
+    async ["_opencode/session/retry"](params: RetrySessionRequest): Promise<RetrySessionResponse> {
+      const session = this.sessionManager.get(params.sessionId)
+      const source = await this.sdk.session
+        .message(
+        {
+          sessionID: params.sessionId,
+          messageID: params.messageId,
+          directory: session.cwd,
+        },
+        { throwOnError: true },
+        )
+        .then((x) => x.data)
+
+      const sourceMessage = source.info
+      const retriedUserMessageId =
+        sourceMessage.role === "assistant"
+          ? sourceMessage.parentID
+          : sourceMessage.role === "user"
+            ? sourceMessage.id
+            : undefined
+
+      if (!retriedUserMessageId) {
+        throw new Error(`Retry requires a user or assistant message: ${params.messageId}`)
+      }
+
+      const original = await this.sdk.session
+        .message(
+        {
+          sessionID: params.sessionId,
+          messageID: retriedUserMessageId,
+          directory: session.cwd,
+        },
+        { throwOnError: true },
+        )
+        .then((x) => x.data)
+
+      if (original.info.role !== "user") {
+        throw new Error(`Retry target did not resolve to a user message: ${retriedUserMessageId}`)
+      }
+
+      await this.sdk.session.revert(
+        {
+          sessionID: params.sessionId,
+          directory: session.cwd,
+          messageID: params.messageId,
+        },
+        { throwOnError: true },
+      )
+
+      const reverted = await Session.get(SessionID.make(params.sessionId))
+      await SessionRevert.cleanup(reverted)
+
+      const parts = original.parts.flatMap((part: SessionMessageResponse["parts"][number]) => {
+        switch (part.type) {
+          case "text":
+          case "file":
+          case "agent":
+          case "subtask": {
+            const { id: _id, messageID: _messageID, sessionID: _sessionID, ...inputPart } = part
+            return [inputPart]
+          }
+          default:
+            return []
+        }
+      })
+
+      try {
+        await this.sdk.session.prompt(
+          {
+            sessionID: params.sessionId,
+            directory: session.cwd,
+            agent: original.info.agent,
+            model: original.info.model,
+            ...(original.info.tools ? { tools: original.info.tools } : {}),
+            ...(original.info.format ? { format: original.info.format } : {}),
+            ...(original.info.system ? { system: original.info.system } : {}),
+            ...(original.info.variant ? { variant: original.info.variant } : {}),
+            parts,
+          },
+          { throwOnError: true },
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
+        if (!message.includes("cancel")) {
+          throw error
+        }
+        return {
+          sessionId: params.sessionId,
+          sourceMessageId: params.messageId,
+          retriedUserMessageId,
+          stopReason: "cancelled",
+        }
+      }
+
+      return {
+        sessionId: params.sessionId,
+        sourceMessageId: params.messageId,
+        retriedUserMessageId,
+        stopReason: "end_turn",
+      }
     }
 
     private async processMessage(message: SessionMessageResponse) {
