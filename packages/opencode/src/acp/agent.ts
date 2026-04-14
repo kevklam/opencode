@@ -40,10 +40,12 @@ import { Agent as AgentModule } from "../agent/agent"
 import { Installation } from "@/installation"
 import { Bus } from "@/bus"
 import { MessageV2 } from "@/session/message-v2"
+import { Session } from "@/session"
 import { SessionID } from "@/session/schema"
 import { Config } from "@/config/config"
 import { Todo } from "@/session/todo"
 import { Pin } from "@/session/pin"
+import { SessionRevert } from "@/session/revert"
 import { z } from "zod"
 import { LoadAPIKeyError } from "ai"
 import type { AssistantMessage, Event, OpencodeClient, SessionMessageResponse, ToolPart } from "@opencode-ai/sdk/v2"
@@ -51,6 +53,10 @@ import { applyPatch } from "diff"
 
 type ModeOption = { id: string; name: string; description?: string }
 type ModelOption = { modelId: string; name: string }
+type DeleteSessionRequest = { sessionId: string }
+type DeleteSessionResponse = { sessionId: string }
+type RevertSessionRequest = { sessionId: string; messageId: string }
+type RevertSessionResponse = { sessionId: string; messageId: string }
 
 const DEFAULT_VARIANT_VALUE = "default"
 
@@ -598,6 +604,17 @@ export namespace ACP {
       throw new Error("Authentication not implemented")
     }
 
+    async extMethod(method: string, params: Record<string, unknown>) {
+      switch (method) {
+        case "_opencode/session/delete":
+          return this["_opencode/session/delete"](params as DeleteSessionRequest)
+        case "_opencode/session/revert":
+          return this["_opencode/session/revert"](params as RevertSessionRequest)
+        default:
+          throw RequestError.methodNotFound(method)
+      }
+    }
+
     async newSession(params: NewSessionRequest) {
       const directory = params.cwd
       try {
@@ -697,7 +714,7 @@ export namespace ACP {
       }
     }
 
-    async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+    async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
       try {
         const cursor = params.cursor ? Number(params.cursor) : undefined
         const limit = 100
@@ -842,6 +859,53 @@ export namespace ACP {
         }
         throw e
       }
+    }
+
+    async unstable_listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
+      return this.listSessions(params)
+    }
+
+    async ["_opencode/session/delete"](params: DeleteSessionRequest): Promise<DeleteSessionResponse> {
+      const session = this.sessionManager.get(params.sessionId)
+      await this.sdk.session.delete(
+        {
+          sessionID: params.sessionId,
+          directory: session.cwd,
+        },
+        { throwOnError: true },
+      )
+      this.sessionManager.remove(params.sessionId)
+      return { sessionId: params.sessionId }
+    }
+
+    async ["_opencode/session/revert"](params: RevertSessionRequest): Promise<RevertSessionResponse> {
+      const session = this.sessionManager.get(params.sessionId)
+      const messages = await this.sdk.session
+        .messages(
+          {
+            sessionID: params.sessionId,
+            directory: session.cwd,
+          },
+          { throwOnError: true },
+        )
+        .then((x) => x.data ?? [])
+
+      const targetExists = messages.some((message) => message.info.id === params.messageId)
+      if (!targetExists) {
+        throw new Error(`Message not found for revert: ${params.messageId}`)
+      }
+
+      await this.sdk.session.revert(
+        {
+          sessionID: params.sessionId,
+          directory: session.cwd,
+          messageID: params.messageId,
+        },
+        { throwOnError: true },
+      )
+      const reverted = await Session.get(SessionID.make(params.sessionId))
+      await SessionRevert.cleanup(reverted)
+      return { sessionId: params.sessionId, messageId: params.messageId }
     }
 
     private async processMessage(message: SessionMessageResponse) {
@@ -1332,6 +1396,7 @@ export namespace ACP {
       const sessionID = params.sessionId
       const session = this.sessionManager.get(sessionID)
       const directory = session.cwd
+      const promptMessageId = params.messageId ?? null
 
       const current = session.model
       const model = current ?? (await defaultModel(this.config, directory))
@@ -1462,6 +1527,7 @@ export namespace ACP {
         return {
           stopReason: "end_turn" as const,
           usage: msg ? buildUsage(msg) : undefined,
+          userMessageId: msg?.parentID ?? promptMessageId,
           _meta: {},
         }
       }
@@ -1485,6 +1551,7 @@ export namespace ACP {
         return {
           stopReason: "end_turn" as const,
           usage: msg ? buildUsage(msg) : undefined,
+          userMessageId: msg?.parentID ?? promptMessageId,
           _meta: {},
         }
       }
@@ -1507,6 +1574,7 @@ export namespace ACP {
 
       return {
         stopReason: "end_turn" as const,
+        userMessageId: promptMessageId,
         _meta: {},
       }
     }
