@@ -69,6 +69,8 @@ type RetrySessionResponse = {
   retriedUserMessageId: string
   stopReason: "end_turn" | "cancelled"
 }
+type RewriteMessageRequest = { sessionId: string; messageId: string; content: string }
+type RewriteMessageResponse = { sessionId: string; messageId: string }
 const decodeTodos = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Array(Todo.Info)))
 
 const DEFAULT_VARIANT_VALUE = "default"
@@ -613,6 +615,8 @@ export class Agent implements ACPAgent {
         return this["_opencode/session/revert"](params as RevertSessionRequest)
       case "_opencode/session/retry":
         return this["_opencode/session/retry"](params as RetrySessionRequest)
+      case "_opencode/message/rewrite":
+        return this["_opencode/message/rewrite"](params as RewriteMessageRequest)
       default:
         throw RequestError.methodNotFound(method)
     }
@@ -1016,6 +1020,92 @@ export class Agent implements ACPAgent {
       sourceMessageId: params.messageId,
       retriedUserMessageId,
       stopReason: "end_turn",
+    }
+  }
+
+  async ["_opencode/message/rewrite"](params: RewriteMessageRequest): Promise<RewriteMessageResponse> {
+    const session = this.sessionManager.get(params.sessionId)
+    const content = params.content.trim()
+    if (!content) {
+      throw new Error("Rewritten message text cannot be empty")
+    }
+
+    const message = await this.sdk.session
+      .message(
+        {
+          sessionID: params.sessionId,
+          messageID: params.messageId,
+          directory: session.cwd,
+        },
+        { throwOnError: true },
+      )
+      .then((x) => x.data)
+
+    if (message.info.role === "assistant" && !message.info.time.completed && !message.info.error) {
+      throw new Error(`Cannot rewrite a streaming assistant message: ${params.messageId}`)
+    }
+
+    if (message.parts.some((part) => part.type === "tool")) {
+      throw new Error(`Cannot rewrite a message with tool calls: ${params.messageId}`)
+    }
+
+    const editableTextParts = message.parts.filter(
+      (part): part is Extract<SessionMessageResponse["parts"][number], { type: "text" }> =>
+        part.type === "text" && part.ignored !== true,
+    )
+
+    if (editableTextParts.length === 0) {
+      throw new Error(`Message has no editable text content: ${params.messageId}`)
+    }
+
+    const firstTextPart = editableTextParts[0]
+    await this.sdk.part.update(
+      {
+        sessionID: params.sessionId,
+        messageID: params.messageId,
+        partID: firstTextPart.id,
+        directory: session.cwd,
+        part: {
+          ...firstTextPart,
+          text: content,
+        },
+      },
+      { throwOnError: true },
+    )
+
+    for (const part of editableTextParts.slice(1)) {
+      await this.sdk.part.delete(
+        {
+          sessionID: params.sessionId,
+          messageID: params.messageId,
+          partID: part.id,
+          directory: session.cwd,
+        },
+        { throwOnError: true },
+      )
+    }
+
+    if (message.info.role === "assistant") {
+      const reasoningParts = message.parts.filter(
+        (part): part is Extract<SessionMessageResponse["parts"][number], { type: "reasoning" }> =>
+          part.type === "reasoning",
+      )
+      for (const part of reasoningParts) {
+        await this.sdk.part.delete(
+          {
+            sessionID: params.sessionId,
+            messageID: params.messageId,
+            partID: part.id,
+            directory: session.cwd,
+          },
+          { throwOnError: true },
+        )
+      }
+    }
+
+    return {
+      sessionId: params.sessionId,
+      messageId: params.messageId,
     }
   }
 
