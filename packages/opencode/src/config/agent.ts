@@ -12,6 +12,7 @@ import * as ConfigMarkdown from "./markdown"
 import { ConfigModelID } from "./model-id"
 import { ConfigParse } from "./parse"
 import { ConfigPermission } from "./permission"
+import path from "path"
 
 const log = Log.create({ service: "config" })
 
@@ -29,6 +30,10 @@ const AgentSchema = Schema.StructWithRest(
     temperature: Schema.optional(Schema.Finite),
     top_p: Schema.optional(Schema.Finite),
     prompt: Schema.optional(Schema.String),
+    post_history_instructions: Schema.optional(Schema.String).annotate({
+      description:
+        "Path to a markdown file whose contents are injected as post-history instructions for this agent.",
+    }),
     tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)).annotate({
       description: "@deprecated Use 'permission' field instead",
     }),
@@ -56,6 +61,7 @@ const KNOWN_KEYS = new Set([
   "model",
   "variant",
   "prompt",
+  "post_history_instructions",
   "description",
   "temperature",
   "top_p",
@@ -129,10 +135,29 @@ export async function load(dir: string) {
     const patterns = ["/.opencode/agent/", "/.opencode/agents/", "/agent/", "/agents/"]
     const name = configEntryNameFromPath(item, patterns)
 
+    const postHistoryInstructions =
+      typeof md.data.post_history_instructions === "string"
+        ? (
+            await ConfigMarkdown.parse(path.resolve(path.dirname(item), md.data.post_history_instructions)).catch(
+              (err) => {
+                if (ConfigMarkdown.FrontmatterError.isInstance(err) || ConfigMarkdown.IncludeError.isInstance(err)) {
+                  throw err
+                }
+                throw new Error(
+                  `Failed to load post_history_instructions for agent ${name}: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                )
+              },
+            )
+          ).content.trim()
+        : undefined
+
     const config = {
       name,
       ...md.data,
       prompt: md.content.trim(),
+      post_history_instructions: postHistoryInstructions,
     }
     result[config.name] = ConfigParse.effectSchema(Info, config, item)
   }

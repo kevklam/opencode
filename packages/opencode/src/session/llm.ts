@@ -212,6 +212,14 @@ const live: Layer.Layer<
                 }),
               ),
               ...inputMessages,
+              ...(input.agent.postHistoryInstructions
+                ? ([
+                    {
+                      role: "system",
+                      content: input.agent.postHistoryInstructions,
+                    },
+                  ] satisfies ModelMessage[])
+                : []),
             ]
 
       const params = yield* plugin.trigger(
