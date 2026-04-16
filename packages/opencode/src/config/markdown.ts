@@ -1,12 +1,11 @@
 import { NamedError } from "@opencode-ai/util/error"
 import matter from "gray-matter"
 import { z } from "zod"
-import { Filesystem } from "../util/filesystem"
+import { ConfigInclude } from "./include"
 
 export namespace ConfigMarkdown {
   export const FILE_REGEX = /(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g
   export const SHELL_REGEX = /!`([^`]+)`/g
-
   export function files(template: string) {
     return Array.from(template.matchAll(FILE_REGEX))
   }
@@ -69,7 +68,7 @@ export namespace ConfigMarkdown {
   }
 
   export async function parse(filePath: string) {
-    const template = await Filesystem.readText(filePath)
+    const template = await ConfigInclude.expand(filePath)
 
     try {
       const md = matter(template)
@@ -96,4 +95,6 @@ export namespace ConfigMarkdown {
       message: z.string(),
     }),
   )
+
+  export const IncludeError = ConfigInclude.IncludeError
 }
