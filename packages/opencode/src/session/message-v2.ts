@@ -639,27 +639,22 @@ export namespace MessageV2 {
       if (msg.parts.length === 0) continue
 
       if (msg.info.role === "user") {
-        const userMessage: UIMessage = {
-          id: msg.info.id,
-          role: "user",
-          parts: [],
-        }
-        result.push(userMessage)
+        const userParts: UIMessage["parts"] = []
         for (const part of msg.parts) {
           if (part.type === "text" && !part.ignored)
-            userMessage.parts.push({
+            userParts.push({
               type: "text",
               text: part.text,
             })
           // text/plain and directory files are converted into text parts, ignore them
           if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory") {
             if (options?.stripMedia && isMedia(part.mime)) {
-              userMessage.parts.push({
+              userParts.push({
                 type: "text",
                 text: `[Attached ${part.mime}: ${part.filename ?? "file"}]`,
               })
             } else {
-              userMessage.parts.push({
+              userParts.push({
                 type: "file",
                 url: part.url,
                 mediaType: part.mime,
@@ -669,17 +664,24 @@ export namespace MessageV2 {
           }
 
           if (part.type === "compaction") {
-            userMessage.parts.push({
+            userParts.push({
               type: "text",
               text: "What did we do so far?",
             })
           }
           if (part.type === "subtask") {
-            userMessage.parts.push({
+            userParts.push({
               type: "text",
               text: "The following tool was executed by the user",
             })
           }
+        }
+        if (userParts.length > 0) {
+          result.push({
+            id: msg.info.id,
+            role: "user",
+            parts: userParts,
+          })
         }
       }
 
@@ -793,10 +795,10 @@ export namespace MessageV2 {
                 })),
               ],
             })
+            }
           }
         }
       }
-    }
 
     const tools = Object.fromEntries(Array.from(toolNames).map((toolName) => [toolName, { toModelOutput }]))
 
