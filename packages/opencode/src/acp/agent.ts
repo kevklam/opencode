@@ -66,6 +66,7 @@ type RetrySessionResponse = {
 }
 type RewriteMessageRequest = { sessionId: string; messageId: string; content: string }
 type RewriteMessageResponse = { sessionId: string; messageId: string }
+type FirstMessageChangedParams = { sessionId: string; agentId?: string; firstMessage: string | null }
 
 const DEFAULT_VARIANT_VALUE = "default"
 
@@ -644,6 +645,7 @@ export namespace ACP {
           mcpServers: params.mcpServers,
           sessionId,
         })
+        await this.emitFirstMessageChanged(sessionId)
 
         return {
           sessionId,
@@ -679,6 +681,7 @@ export namespace ACP {
           mcpServers: params.mcpServers,
           sessionId,
         })
+        await this.emitFirstMessageChanged(sessionId)
 
         // Replay session history
         const messages = await this.sdk.session
@@ -1434,6 +1437,51 @@ export namespace ACP {
         }))
     }
 
+    private async emitFirstMessageChanged(sessionId: string): Promise<void> {
+      const session = this.sessionManager.get(sessionId)
+      const directory = session.cwd
+      const [messages, agents] = await Promise.all([
+        this.sdk.session
+          .messages({ sessionID: sessionId, directory }, { throwOnError: true })
+          .then((x) => x.data ?? [])
+          .catch((error) => {
+            log.error("failed to load session messages for first_message preview", { sessionId, error })
+            return []
+          }),
+        this.config.sdk.app
+          .agents({ directory }, { throwOnError: true })
+          .then((x) => x.data ?? [])
+          .catch((error) => {
+            log.error("failed to load agents for first_message preview", { sessionId, error })
+            return []
+          }),
+      ])
+
+      const agentId = session.modeId ?? (await AgentModule.defaultAgent().catch(() => undefined))
+      const firstMessage =
+        messages.length === 0
+          ? ((
+              agentId
+                ? (agents.find((agent) => agent.name === agentId) as { firstMessage?: string } | undefined)
+                    ?.firstMessage
+                : undefined
+            ) ?? null)
+          : null
+
+      await this.connection
+        .extNotification(
+          "_opencode/session/first_message_changed",
+          {
+            sessionId,
+            agentId,
+            firstMessage,
+          } satisfies FirstMessageChangedParams,
+        )
+        .catch((error) => {
+          log.error("failed to send first_message change notification", { sessionId, error })
+        })
+    }
+
     private async resolveModeState(
       directory: string,
       sessionId: string,
@@ -1591,6 +1639,7 @@ export namespace ACP {
         throw new Error(`Agent not found: ${params.modeId}`)
       }
       this.sessionManager.setMode(params.sessionId, params.modeId)
+      await this.emitFirstMessageChanged(params.sessionId)
     }
 
     async prompt(params: PromptRequest) {

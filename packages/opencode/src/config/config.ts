@@ -491,6 +491,7 @@ export namespace Config {
       temperature: z.number().optional(),
       top_p: z.number().optional(),
       prompt: z.string().optional(),
+      first_message: z.string().optional().describe("Assistant first message to inject at the start of a fresh conversation."),
       post_history_instructions: z
         .string()
         .optional()
@@ -539,6 +540,7 @@ export namespace Config {
         "permission",
         "disable",
         "tools",
+        "first_message",
         "post_history_instructions",
       ])
 

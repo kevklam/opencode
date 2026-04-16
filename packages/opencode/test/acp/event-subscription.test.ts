@@ -236,6 +236,13 @@ function createFakeAgent() {
               name: "build",
               description: "build",
               mode: "agent",
+              firstMessage: null,
+            },
+            {
+              name: "roleplay",
+              description: "roleplay",
+              mode: "agent",
+              firstMessage: "Preview greeting",
             },
           ],
         }
@@ -394,6 +401,43 @@ describe("acp.agent event subscription", () => {
           params: {
             sessionId: session.id,
             pins: [{ id: pinID, kind: "file", path: filepath }],
+          },
+        })
+
+        stop()
+      },
+    })
+  })
+
+  test("emits first_message preview notifications for empty sessions and mode changes", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { agent, extNotifications, stop } = createFakeAgent()
+        const cwd = "/tmp/opencode-acp-test"
+
+        const sessionId = await agent.newSession({ cwd, mcpServers: [] } as any).then((x) => x.sessionId)
+        await new Promise((r) => setTimeout(r, 20))
+
+        expect(extNotifications).toContainEqual({
+          method: "_opencode/session/first_message_changed",
+          params: {
+            sessionId,
+            agentId: "build",
+            firstMessage: null,
+          },
+        })
+
+        await agent.setSessionMode({ sessionId, modeId: "roleplay" } as any)
+        await new Promise((r) => setTimeout(r, 20))
+
+        expect(extNotifications).toContainEqual({
+          method: "_opencode/session/first_message_changed",
+          params: {
+            sessionId,
+            agentId: "roleplay",
+            firstMessage: "Preview greeting",
           },
         })
 

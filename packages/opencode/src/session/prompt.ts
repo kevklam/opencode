@@ -966,7 +966,55 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 .pipe(Effect.catch(() => Effect.succeed(undefined)))
             : undefined
         const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
+        const existingMessages = yield* sessions.messages({ sessionID: input.sessionID })
 
+        if (existingMessages.length === 0 && ag.firstMessage) {
+          const ctx = yield* InstanceState.context
+          const anchor: MessageV2.User = {
+            id: MessageID.ascending(),
+            sessionID: input.sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: ag.name,
+            model,
+            variant,
+          }
+          yield* sessions.updateMessage(anchor)
+          yield* sessions.updatePart({
+            type: "text",
+            id: PartID.ascending(),
+            messageID: anchor.id,
+            sessionID: input.sessionID,
+            text: "__first_message_anchor__",
+            synthetic: true,
+            ignored: true,
+          })
+
+          const greeting: MessageV2.Assistant = {
+            id: MessageID.ascending(),
+            sessionID: input.sessionID,
+            parentID: anchor.id,
+            mode: ag.name,
+            agent: ag.name,
+            cost: 0,
+            path: { cwd: ctx.directory, root: ctx.worktree },
+            time: { created: Date.now(), completed: Date.now() },
+            role: "assistant",
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: model.modelID,
+            providerID: model.providerID,
+            finish: "first_message",
+            variant,
+          }
+          yield* sessions.updateMessage(greeting)
+          yield* sessions.updatePart({
+            type: "text",
+            id: PartID.ascending(),
+            messageID: greeting.id,
+            sessionID: input.sessionID,
+            text: ag.firstMessage,
+          })
+        }
         const info: MessageV2.Info = {
           id: input.messageID ?? MessageID.ascending(),
           role: "user",

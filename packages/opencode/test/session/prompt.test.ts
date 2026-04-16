@@ -226,6 +226,149 @@ describe("session.prompt special characters", () => {
   })
 })
 
+describe("session.prompt first_message seeding", () => {
+  test("persists agent first_message as a real assistant message before the first user turn", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url)
+        if (!url.pathname.endsWith("/chat/completions")) {
+          return new Response("not found", { status: 404 })
+        }
+        return new Response(chat("Maybe both."), {
+          headers: { "Content-Type": "text/event-stream" },
+        })
+      },
+    })
+
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        enabled_providers: ["alibaba"],
+        provider: {
+          alibaba: {
+            options: {
+              apiKey: "test-key",
+              baseURL: `${server.url.origin}/v1`,
+            },
+          },
+        },
+        agent: {
+          roleplay: {
+            model: "alibaba/qwen-plus",
+            first_message: 'Rain tapped softly against the harbor windows. "You came anyway," Mira says.',
+          },
+        },
+      },
+    })
+
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const session = await Session.create({})
+          expect(await Session.messages({ sessionID: session.id })).toHaveLength(0)
+
+          await SessionPrompt.prompt({
+            sessionID: session.id,
+            agent: "roleplay",
+            parts: [{ type: "text", text: "Maybe both. Are you going to tell me why you asked me here?" }],
+          })
+
+          const messages = await Session.messages({ sessionID: session.id })
+          expect(messages).toHaveLength(4)
+          expect(messages[0]?.info.role).toBe("user")
+          expect(messages[0]?.parts.every((part) => part.type === "text" && part.synthetic && part.ignored)).toBe(true)
+          expect(messages[1]?.info.role).toBe("assistant")
+          expect(messages[1]?.parts.find((part) => part.type === "text" && part.text.includes("Rain tapped softly"))).toBeDefined()
+          expect(messages[1]?.info).toMatchObject({
+            agent: "roleplay",
+            finish: "first_message",
+          })
+          expect(messages[2]?.info.role).toBe("user")
+          expect(messages[3]?.info.role).toBe("assistant")
+          if (messages[3]?.info.role !== "assistant") throw new Error("expected assistant reply")
+          expect(messages[3].info.parentID).toBe(messages[2]?.info.id)
+        },
+      })
+    } finally {
+      server.stop()
+    }
+  })
+
+  test("does not reseed first_message once the session already has history", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url)
+        if (!url.pathname.endsWith("/chat/completions")) {
+          return new Response("not found", { status: 404 })
+        }
+        return new Response(chat("Reply"), {
+          headers: { "Content-Type": "text/event-stream" },
+        })
+      },
+    })
+
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        enabled_providers: ["alibaba"],
+        provider: {
+          alibaba: {
+            options: {
+              apiKey: "test-key",
+              baseURL: `${server.url.origin}/v1`,
+            },
+          },
+        },
+        agent: {
+          roleplay: {
+            model: "alibaba/qwen-plus",
+            first_message: 'Rain tapped softly against the harbor windows. "You came anyway," Mira says.',
+          },
+        },
+      },
+    })
+
+    try {
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const session = await Session.create({})
+
+          await SessionPrompt.prompt({
+            sessionID: session.id,
+            agent: "roleplay",
+            parts: [{ type: "text", text: "First user turn." }],
+          })
+          await SessionPrompt.prompt({
+            sessionID: session.id,
+            agent: "roleplay",
+            parts: [{ type: "text", text: "Second user turn." }],
+          })
+
+          const messages = await Session.messages({ sessionID: session.id })
+          const greetings = messages.filter(
+            (message) =>
+              message.info.role === "assistant" &&
+              message.parts.some((part) => part.type === "text" && part.text.includes("Rain tapped softly")),
+          )
+          expect(greetings).toHaveLength(1)
+          const anchors = messages.filter(
+            (message) =>
+              message.info.role === "user" &&
+              message.parts.every((part) => part.type === "text" && part.synthetic && part.ignored),
+          )
+          expect(anchors).toHaveLength(1)
+        },
+      })
+    } finally {
+      server.stop()
+    }
+  })
+})
+
 describe("session.prompt regression", () => {
   test("does not loop empty assistant turns for a simple reply", async () => {
     let calls = 0
