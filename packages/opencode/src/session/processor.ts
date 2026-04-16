@@ -52,6 +52,11 @@ export namespace SessionProcessor {
     needsCompaction: boolean
     currentText: MessageV2.TextPart | undefined
     reasoningMap: Record<string, MessageV2.ReasoningPart>
+    textStream: {
+      mode: "undecided" | "thinking" | "text"
+      carry: string
+      rawThinkID: string
+    }
   }
 
   type StreamEvent = Event
@@ -99,6 +104,11 @@ export namespace SessionProcessor {
           needsCompaction: false,
           currentText: undefined,
           reasoningMap: {},
+          textStream: {
+            mode: "undecided",
+            carry: "",
+            rawThinkID: "__raw_think__",
+          },
         }
         let aborted = false
 
@@ -107,6 +117,186 @@ export namespace SessionProcessor {
             providerID: input.model.providerID,
             aborted,
           })
+
+        const THINK_OPEN = "<think>"
+        const THINK_CLOSE = "</think>"
+        const taggedThinkingEnabled = ctx.model.capabilities.reasoning
+        const normalizeProviderMetadata = (providerMetadata?: unknown): Record<string, any> | undefined =>
+          providerMetadata && typeof providerMetadata === "object"
+            ? (providerMetadata as Record<string, any>)
+            : undefined
+
+        const resetTaggedThinkingState = () => {
+          ctx.textStream.mode = "undecided"
+          ctx.textStream.carry = ""
+        }
+
+        const sharedSuffixPrefixLength = (value: string, token: string) => {
+          const max = Math.min(value.length, token.length - 1)
+          for (let i = max; i > 0; i--) {
+            if (value.endsWith(token.slice(0, i))) return i
+          }
+          return 0
+        }
+
+        const ensureTextPart = Effect.fn(function* (providerMetadata?: unknown) {
+          const metadata = normalizeProviderMetadata(providerMetadata)
+          if (ctx.currentText) {
+            if (metadata) ctx.currentText.metadata = metadata
+            return ctx.currentText
+          }
+          ctx.currentText = {
+            id: PartID.ascending(),
+            messageID: ctx.assistantMessage.id,
+            sessionID: ctx.assistantMessage.sessionID,
+            type: "text",
+            text: "",
+            time: { start: Date.now() },
+            metadata,
+          }
+          yield* session.updatePart(ctx.currentText)
+          return ctx.currentText
+        })
+
+        const appendTextDelta = Effect.fn(function* (text: string, providerMetadata?: unknown) {
+          if (!text) return
+          const part = yield* ensureTextPart(providerMetadata)
+          part.text += text
+          const metadata = normalizeProviderMetadata(providerMetadata)
+          if (metadata) part.metadata = metadata
+          yield* session.updatePartDelta({
+            sessionID: part.sessionID,
+            messageID: part.messageID,
+            partID: part.id,
+            field: "text",
+            delta: text,
+          })
+        })
+
+        const ensureReasoningPart = Effect.fn(function* (providerMetadata?: unknown) {
+          const metadata = normalizeProviderMetadata(providerMetadata)
+          if (ctx.textStream.rawThinkID in ctx.reasoningMap) {
+            const part = ctx.reasoningMap[ctx.textStream.rawThinkID]!
+            if (metadata) part.metadata = metadata
+            return part
+          }
+          ctx.reasoningMap[ctx.textStream.rawThinkID] = {
+            id: PartID.ascending(),
+            messageID: ctx.assistantMessage.id,
+            sessionID: ctx.assistantMessage.sessionID,
+            type: "reasoning",
+            text: "",
+            time: { start: Date.now() },
+            metadata,
+          }
+          const part = ctx.reasoningMap[ctx.textStream.rawThinkID]!
+          yield* session.updatePart(part)
+          return part
+        })
+
+        const appendReasoningDelta = Effect.fn(function* (text: string, providerMetadata?: unknown) {
+          if (!text) return
+          const part = yield* ensureReasoningPart(providerMetadata)
+          part.text += text
+          const metadata = normalizeProviderMetadata(providerMetadata)
+          if (metadata) part.metadata = metadata
+          yield* session.updatePartDelta({
+            sessionID: part.sessionID,
+            messageID: part.messageID,
+            partID: part.id,
+            field: "text",
+            delta: text,
+          })
+        })
+
+        const finalizeReasoningPart = Effect.fn(function* (providerMetadata?: unknown) {
+          const part = ctx.reasoningMap[ctx.textStream.rawThinkID]
+          if (!part) return
+          const metadata = normalizeProviderMetadata(providerMetadata)
+          part.text = part.text.trimEnd()
+          part.time = { ...part.time, end: Date.now() }
+          if (metadata) part.metadata = metadata
+          yield* session.updatePart(part)
+          delete ctx.reasoningMap[ctx.textStream.rawThinkID]
+        })
+
+        const processTaggedThinkingText: (
+          chunk: string,
+          providerMetadata?: unknown,
+        ) => Effect.Effect<void, never, never>
+        = Effect.fn(function* (chunk: string, providerMetadata?: unknown) {
+          if (!taggedThinkingEnabled) {
+            yield* appendTextDelta(chunk, providerMetadata)
+            return
+          }
+
+          let pending = ctx.textStream.carry + chunk
+          ctx.textStream.carry = ""
+
+          while (pending) {
+            if (ctx.textStream.mode === "undecided") {
+              if (THINK_OPEN.startsWith(pending) && pending.length < THINK_OPEN.length) {
+                ctx.textStream.carry = pending
+                return
+              }
+
+              if (pending.startsWith(THINK_OPEN)) {
+                ctx.textStream.mode = "thinking"
+                pending = pending.slice(THINK_OPEN.length)
+                continue
+              }
+
+              ctx.textStream.mode = "text"
+              yield* appendTextDelta(pending, providerMetadata)
+              return
+            }
+
+            if (ctx.textStream.mode === "thinking") {
+              const closeIndex = pending.indexOf(THINK_CLOSE)
+              if (closeIndex >= 0) {
+                const reasoningText = pending.slice(0, closeIndex)
+                if (reasoningText) yield* appendReasoningDelta(reasoningText, providerMetadata)
+                yield* finalizeReasoningPart(providerMetadata)
+                ctx.textStream.mode = "text"
+                pending = pending.slice(closeIndex + THINK_CLOSE.length)
+                continue
+              }
+
+              const carryLength = sharedSuffixPrefixLength(pending, THINK_CLOSE)
+              const emit = pending.slice(0, pending.length - carryLength)
+              ctx.textStream.carry = pending.slice(pending.length - carryLength)
+              if (emit) yield* appendReasoningDelta(emit, providerMetadata)
+              return
+            }
+
+            yield* appendTextDelta(pending, providerMetadata)
+            return
+          }
+        })
+
+        const flushTaggedThinkingText = Effect.fn(function* (providerMetadata?: unknown) {
+          if (!taggedThinkingEnabled) return
+
+          if (ctx.textStream.carry) {
+            if (ctx.textStream.mode === "thinking") {
+              yield* appendReasoningDelta(ctx.textStream.carry, providerMetadata)
+            } else {
+              yield* appendTextDelta(ctx.textStream.carry, providerMetadata)
+            }
+            ctx.textStream.carry = ""
+          }
+
+          if (ctx.textStream.mode === "undecided") {
+            ctx.textStream.mode = "text"
+          }
+
+          if (ctx.textStream.mode === "thinking") {
+            yield* finalizeReasoningPart(providerMetadata)
+            ctx.textStream.mode = "text"
+          }
+
+          resetTaggedThinkingState()
+        })
 
         const handleEvent = Effect.fn("SessionProcessor.handleEvent")(function* (value: StreamEvent) {
           switch (value.type) {
@@ -312,32 +502,15 @@ export namespace SessionProcessor {
             }
 
             case "text-start":
-              ctx.currentText = {
-                id: PartID.ascending(),
-                messageID: ctx.assistantMessage.id,
-                sessionID: ctx.assistantMessage.sessionID,
-                type: "text",
-                text: "",
-                time: { start: Date.now() },
-                metadata: value.providerMetadata,
-              }
-              yield* session.updatePart(ctx.currentText)
+              resetTaggedThinkingState()
               return
 
             case "text-delta":
-              if (!ctx.currentText) return
-              ctx.currentText.text += value.text
-              if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
-              yield* session.updatePartDelta({
-                sessionID: ctx.currentText.sessionID,
-                messageID: ctx.currentText.messageID,
-                partID: ctx.currentText.id,
-                field: "text",
-                delta: value.text,
-              })
+              yield* processTaggedThinkingText(value.text, value.providerMetadata)
               return
 
             case "text-end":
+              yield* flushTaggedThinkingText(value.providerMetadata)
               if (!ctx.currentText) return
               ctx.currentText.text = ctx.currentText.text.trimEnd()
               ctx.currentText.text = (yield* plugin.trigger(
@@ -365,6 +538,8 @@ export namespace SessionProcessor {
         })
 
         const cleanup = Effect.fn("SessionProcessor.cleanup")(function* () {
+          yield* flushTaggedThinkingText()
+
           if (ctx.snapshot) {
             const patch = yield* snapshot.patch(ctx.snapshot)
             if (patch.files.length) {
@@ -451,6 +626,7 @@ export namespace SessionProcessor {
             yield* Effect.gen(function* () {
               ctx.currentText = undefined
               ctx.reasoningMap = {}
+              resetTaggedThinkingState()
               const stream = llm.stream(streamInput)
 
               yield* stream.pipe(
