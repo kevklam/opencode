@@ -481,6 +481,98 @@ describe("session.llm.stream", () => {
     })
   })
 
+  test("injects agent post-history instructions after message history", async () => {
+    const server = state.server
+    if (!server) throw new Error("Server not initialized")
+
+    const providerID = "alibaba"
+    const modelID = "qwen-plus"
+    const fixture = await loadFixture(providerID, modelID)
+    const model = fixture.model
+
+    const request = waitRequest(
+      "/chat/completions",
+      new Response(createChatStream("Hello"), {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    )
+
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(
+          path.join(dir, "opencode.json"),
+          JSON.stringify({
+            $schema: "https://opencode.ai/config.json",
+            enabled_providers: [providerID],
+            provider: {
+              [providerID]: {
+                options: {
+                  apiKey: "test-key",
+                  baseURL: `${server.url.origin}/v1`,
+                },
+              },
+            },
+          }),
+        )
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const resolved = await Provider.getModel(ProviderID.make(providerID), ModelID.make(model.id))
+        const session = await Session.create({})
+
+        const agent = {
+          name: "test",
+          mode: "primary",
+          prompt: "Base system prompt.",
+          postHistoryInstructions: "Write only as Mira. Do not write the user's dialogue.",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+        const user = {
+          id: MessageID.make("user-post-history"),
+          sessionID: session.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agent.name,
+          model: { providerID: ProviderID.make(providerID), modelID: resolved.id },
+        } satisfies MessageV2.User
+
+        const stream = await LLM.stream({
+          user,
+          sessionID: session.id,
+          model: resolved,
+          agent,
+          system: [],
+          abort: new AbortController().signal,
+          messages: [{ role: "user", content: "Hello" }],
+          tools: {},
+        })
+
+        for await (const _ of stream.fullStream) {
+        }
+
+        const capture = await request
+        const messages = capture.body.messages as Array<{ role: string; content: string }>
+        expect(messages[0]).toEqual({
+          role: "system",
+          content: "Base system prompt.",
+        })
+        expect(messages[1]).toEqual({
+          role: "user",
+          content: "Hello",
+        })
+        expect(messages[2]).toEqual({
+          role: "system",
+          content: "Write only as Mira. Do not write the user's dialogue.",
+        })
+      },
+    })
+  })
+
   test("can inject pinned context as a synthetic user message before the latest user message", async () => {
     const server = state.server
     if (!server) throw new Error("Server not initialized")

@@ -209,11 +209,29 @@ export namespace Config {
       const patterns = ["/.opencode/agent/", "/.opencode/agents/", "/agent/", "/agents/"]
       const file = rel(item, patterns) ?? path.basename(item)
       const agentName = trim(file)
+      const postHistoryInstructions =
+        typeof md.data.post_history_instructions === "string"
+          ? (
+              await ConfigMarkdown.parse(path.resolve(path.dirname(item), md.data.post_history_instructions)).catch((err) => {
+                if (
+                  ConfigMarkdown.FrontmatterError.isInstance(err) ||
+                  ConfigMarkdown.IncludeError.isInstance(err)
+                ) {
+                  throw err
+                }
+                throw new InvalidError({
+                  path: item,
+                  message: `Failed to load post_history_instructions for agent ${agentName}: ${err instanceof Error ? err.message : String(err)}`,
+                })
+              })
+            ).content.trim()
+          : undefined
 
       const config = {
         name: agentName,
         ...md.data,
         prompt: md.content.trim(),
+        post_history_instructions: postHistoryInstructions,
       }
       const parsed = Agent.safeParse(config)
       if (parsed.success) {
@@ -473,6 +491,10 @@ export namespace Config {
       temperature: z.number().optional(),
       top_p: z.number().optional(),
       prompt: z.string().optional(),
+      post_history_instructions: z
+        .string()
+        .optional()
+        .describe("Path to a file whose contents will be injected as a separate post-history system message."),
       tools: z.record(z.string(), z.boolean()).optional().describe("@deprecated Use 'permission' field instead"),
       disable: z.boolean().optional(),
       description: z.string().optional().describe("Description of when to use the agent"),
@@ -517,6 +539,7 @@ export namespace Config {
         "permission",
         "disable",
         "tools",
+        "post_history_instructions",
       ])
 
       // Extract unknown properties into options

@@ -416,6 +416,42 @@ test("handles agent configuration", async () => {
   })
 })
 
+test("loads post_history_instructions from a referenced agent file", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await fs.mkdir(path.join(dir, ".opencode", "agents"), { recursive: true })
+      await Filesystem.write(
+        path.join(dir, ".opencode", "agents", "roleplay.md"),
+        [
+          "---",
+          "description: Roleplay",
+          "mode: primary",
+          "post_history_instructions: ./post-history.md",
+          "---",
+          "",
+          "Base system prompt.",
+        ].join("\n"),
+      )
+      await Filesystem.write(
+        path.join(dir, ".opencode", "agents", "post-history.md"),
+        "Write only as the character. Do not write the user's actions.\n",
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.agent?.["roleplay"]).toEqual(
+        expect.objectContaining({
+          prompt: "Base system prompt.",
+          post_history_instructions: "Write only as the character. Do not write the user's actions.",
+        }),
+      )
+    },
+  })
+})
+
 test("treats agent variant as model-scoped setting (not provider option)", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

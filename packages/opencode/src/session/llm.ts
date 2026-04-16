@@ -106,6 +106,7 @@ export namespace LLM {
     if (latestUserIndex === -1) return [...messages, pinnedMessage]
     return [...messages.slice(0, latestUserIndex), pinnedMessage, ...messages.slice(latestUserIndex)]
   }
+
   function debugDumpPath(cfg: Awaited<ReturnType<typeof Config.get>>) {
     return Flag.OPENCODE_LLM_DEBUG_FILE ?? cfg.experimental?.llm_debug_dump_file
   }
@@ -212,6 +213,14 @@ export namespace LLM {
               }),
             ),
             ...inputMessages,
+            ...(input.agent.postHistoryInstructions
+              ? ([
+                  {
+                    role: "system",
+                    content: input.agent.postHistoryInstructions,
+                  },
+                ] satisfies ModelMessage[])
+              : []),
           ]
 
     const params = await Plugin.trigger(
