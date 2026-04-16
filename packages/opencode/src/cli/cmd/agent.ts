@@ -10,6 +10,8 @@ import { Filesystem } from "../../util/filesystem"
 import matter from "gray-matter"
 import { Instance } from "../../project/instance"
 import { EOL } from "os"
+import { Bus } from "../../bus"
+import { Session } from "../../session"
 import type { Argv } from "yargs"
 
 type AgentMode = "all" | "primary" | "subagent"
@@ -235,7 +237,23 @@ const AgentListCommand = cmd({
     await Instance.provide({
       directory: process.cwd(),
       async fn() {
-        const agents = await Agent.list()
+        const loadErrors: string[] = []
+        const unsubscribe = Bus.subscribe(Session.Event.Error, (event) => {
+          if (event.properties.sessionID || !event.properties.error) return
+
+          let message = String(event.properties.error.name)
+          if ("data" in event.properties.error && event.properties.error.data && "message" in event.properties.error.data) {
+            message = String(event.properties.error.data.message)
+          }
+          loadErrors.push(message)
+        })
+
+        let agents: Awaited<ReturnType<typeof Agent.list>>
+        try {
+          agents = await Agent.list()
+        } finally {
+          unsubscribe()
+        }
         const sortedAgents = agents.sort((a, b) => {
           if (a.native !== b.native) {
             return a.native ? -1 : 1
@@ -246,6 +264,14 @@ const AgentListCommand = cmd({
         for (const agent of sortedAgents) {
           process.stdout.write(`${agent.name} (${agent.mode})` + EOL)
           process.stdout.write(`  ${JSON.stringify(agent.permission, null, 2)}` + EOL)
+        }
+
+        const uniqueErrors = [...new Set(loadErrors)]
+        if (uniqueErrors.length > 0) {
+          process.stderr.write(EOL + "Skipped agent files:" + EOL)
+          for (const error of uniqueErrors) {
+            process.stderr.write(`  - ${error}` + EOL)
+          }
         }
       },
     })
