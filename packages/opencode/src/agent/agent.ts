@@ -43,6 +43,7 @@ export const Info = Schema.Struct({
   ),
   variant: Schema.optional(Schema.String),
   prompt: Schema.optional(Schema.String),
+  firstMessage: Schema.optional(Schema.String),
   postHistoryInstructions: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Unknown),
   steps: Schema.optional(Schema.Finite),
@@ -253,6 +254,7 @@ export const layer = Layer.effect(
           if (value.model) item.model = Provider.parseModel(value.model)
           item.variant = value.variant ?? item.variant
           item.prompt = value.prompt ?? item.prompt
+          item.firstMessage = value.first_message ?? item.firstMessage
           item.postHistoryInstructions = value.post_history_instructions ?? item.postHistoryInstructions
           item.description = value.description ?? item.description
           item.temperature = value.temperature ?? item.temperature

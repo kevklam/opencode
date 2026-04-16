@@ -30,6 +30,9 @@ const AgentSchema = Schema.StructWithRest(
     temperature: Schema.optional(Schema.Finite),
     top_p: Schema.optional(Schema.Finite),
     prompt: Schema.optional(Schema.String),
+    first_message: Schema.optional(Schema.String).annotate({
+      description: "Assistant first message to inject at the start of a fresh conversation.",
+    }),
     post_history_instructions: Schema.optional(Schema.String).annotate({
       description:
         "Path to a markdown file whose contents are injected as post-history instructions for this agent.",
@@ -61,6 +64,7 @@ const KNOWN_KEYS = new Set([
   "model",
   "variant",
   "prompt",
+  "first_message",
   "post_history_instructions",
   "description",
   "temperature",
