@@ -226,3 +226,40 @@ describe("ConfigMarkdown: frontmatter has weird model id", async () => {
     expect(result.content.trim()).toBe("Strictly follow da rules")
   })
 })
+
+describe("ConfigMarkdown: include directive", async () => {
+  const result = await ConfigMarkdown.parse(import.meta.dir + "/fixtures/include-root.md")
+
+  test("should preserve frontmatter while expanding includes", () => {
+    expect(result.data.description).toBe("Include root")
+  })
+
+  test("should expand nested includes relative to the current file", () => {
+    expect(result.content.trim().replace(/\r\n/g, "\n")).toBe([
+      "Before",
+      "Child line 1",
+      "Grandchild line",
+      "Child line 2",
+      "After",
+    ].join("\n"))
+  })
+})
+
+describe("ConfigMarkdown: include cycle detection", () => {
+  test("should throw a helpful include-cycle error", async () => {
+    await expect(ConfigMarkdown.parse(import.meta.dir + "/fixtures/include-cycle-a.md")).rejects.toMatchObject({
+      name: "ConfigIncludeError",
+      data: expect.objectContaining({
+        message: expect.stringMatching(/Include cycle detected/),
+      }),
+    })
+  })
+})
+
+describe("ConfigMarkdown: include directive matching", async () => {
+  const result = await ConfigMarkdown.parse(import.meta.dir + "/fixtures/include-inline.md")
+
+  test("should only expand whole-line include directives", () => {
+    expect(result.content.trim()).toBe("Before !include ./include-grandchild.md After")
+  })
+})

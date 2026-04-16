@@ -1,7 +1,7 @@
 import { NamedError } from "@opencode-ai/core/util/error"
 import matter from "gray-matter"
 import { z } from "zod"
-import { Filesystem } from "@/util/filesystem"
+import { ConfigInclude } from "./include"
 
 export const FILE_REGEX = /(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g
 export const SHELL_REGEX = /!`([^`]+)`/g
@@ -68,7 +68,7 @@ export function fallbackSanitization(content: string): string {
 }
 
 export async function parse(filePath: string) {
-  const template = await Filesystem.readText(filePath)
+  const template = await ConfigInclude.expand(filePath)
 
   try {
     const md = matter(template)
@@ -95,5 +95,7 @@ export const FrontmatterError = NamedError.create(
     message: z.string(),
   }),
 )
+
+export const IncludeError = ConfigInclude.IncludeError
 
 export * as ConfigMarkdown from "./markdown"
