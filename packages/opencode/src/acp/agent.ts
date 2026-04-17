@@ -46,6 +46,7 @@ import { MessageV2 } from "@/session/message-v2"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { SessionRevert } from "@/session/revert"
+import { Pin } from "@/session/pin"
 import { Config } from "@/config/config"
 import { ConfigMCP } from "@/config/mcp"
 import { Todo } from "@/session/todo"
@@ -62,6 +63,10 @@ type DeleteSessionRequest = { sessionId: string }
 type DeleteSessionResponse = { sessionId: string }
 type RevertSessionRequest = { sessionId: string; messageId: string }
 type RevertSessionResponse = { sessionId: string; messageId: string }
+type PinFileRequest = { sessionId: string; path: string }
+type PinFileResponse = { sessionId: string; pinId: string; changed: boolean }
+type UnpinRequest = { sessionId: string; pinId: string }
+type UnpinResponse = { sessionId: string; pinId: string }
 type RetrySessionRequest = { sessionId: string; messageId: string }
 type RetrySessionResponse = {
   sessionId: string
@@ -594,6 +599,11 @@ export class Agent implements ACPAgent {
           list: {},
           resume: {},
         },
+        _meta: {
+          opencode: {
+            pins: true,
+          },
+        },
       },
       authMethods: [authMethod],
       agentInfo: {
@@ -613,6 +623,10 @@ export class Agent implements ACPAgent {
         return this["_opencode/session/delete"](params as DeleteSessionRequest)
       case "_opencode/session/revert":
         return this["_opencode/session/revert"](params as RevertSessionRequest)
+      case "_opencode/session/pin_file":
+        return this["_opencode/session/pin_file"](params as PinFileRequest)
+      case "_opencode/session/unpin":
+        return this["_opencode/session/unpin"](params as UnpinRequest)
       case "_opencode/session/retry":
         return this["_opencode/session/retry"](params as RetrySessionRequest)
       case "_opencode/message/rewrite":
@@ -919,6 +933,40 @@ export class Agent implements ACPAgent {
     const reverted = await AppRuntime.runPromise(Session.Service.use((svc) => svc.get(SessionID.make(params.sessionId))))
     await AppRuntime.runPromise(SessionRevert.Service.use((svc) => svc.cleanup(reverted)))
     return { sessionId: params.sessionId, messageId: params.messageId }
+  }
+
+  async ["_opencode/session/pin_file"](params: PinFileRequest): Promise<PinFileResponse> {
+    this.sessionManager.get(params.sessionId)
+    const filepath = Pin.resolveFilePath(params.path)
+    const stat = Filesystem.stat(filepath)
+    if (!stat) throw new Error(`File not found: ${filepath}`)
+    if (!stat.isFile()) throw new Error(`Path is not a file: ${filepath}`)
+
+    const result = Pin.pinFile({
+      sessionID: SessionID.make(params.sessionId),
+      path: filepath,
+    })
+
+    return {
+      sessionId: params.sessionId,
+      pinId: result.pinID,
+      changed: result.changed,
+    }
+  }
+
+  async ["_opencode/session/unpin"](params: UnpinRequest): Promise<UnpinResponse> {
+    this.sessionManager.get(params.sessionId)
+    const removed = Pin.unpin({
+      sessionID: SessionID.make(params.sessionId),
+      target: params.pinId,
+    })
+    if (!removed.changed) {
+      throw new Error(`Pin not found: ${params.pinId}`)
+    }
+    return {
+      sessionId: params.sessionId,
+      pinId: params.pinId,
+    }
   }
 
   async ["_opencode/session/retry"](params: RetrySessionRequest): Promise<RetrySessionResponse> {
