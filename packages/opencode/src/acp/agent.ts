@@ -1163,10 +1163,12 @@ export namespace ACP {
       log.debug("process message", message)
       if (message.info.role !== "assistant" && message.info.role !== "user") return
       const sessionId = message.info.sessionID
+      const messageId = message.info.id
+      const timestamp = new Date(message.info.time.created).toISOString()
 
       for (const part of message.parts) {
         if (part.type === "tool") {
-          await this.toolStart(sessionId, part)
+          await this.toolStart(sessionId, part, messageId, timestamp)
           switch (part.state.status) {
             case "pending":
               this.bashSnapshots.delete(part.callID)
@@ -1189,13 +1191,15 @@ export namespace ACP {
                   update: {
                     sessionUpdate: "tool_call_update",
                     toolCallId: part.callID,
+                    messageId,
+                    timestamp,
                     status: "in_progress",
                     kind: toToolKind(part.tool),
                     title: part.tool,
                     locations: toLocations(part.tool, part.state.input),
                     rawInput: part.state.input,
                     ...(runningContent.length > 0 && { content: runningContent }),
-                  },
+                  } as any,
                 })
                 .catch((err) => {
                   log.error("failed to send tool in_progress to ACP", { error: err })
@@ -1266,6 +1270,8 @@ export namespace ACP {
                   update: {
                     sessionUpdate: "tool_call_update",
                     toolCallId: part.callID,
+                    messageId,
+                    timestamp,
                     status: "completed",
                     kind,
                     content,
@@ -1275,7 +1281,7 @@ export namespace ACP {
                       output: part.state.output,
                       metadata: part.state.metadata,
                     },
-                  },
+                  } as any,
                 })
                 .catch((err) => {
                   log.error("failed to send tool completed to ACP", { error: err })
@@ -1290,6 +1296,8 @@ export namespace ACP {
                   update: {
                     sessionUpdate: "tool_call_update",
                     toolCallId: part.callID,
+                    messageId,
+                    timestamp,
                     status: "failed",
                     kind: toToolKind(part.tool),
                     title: part.tool,
@@ -1307,7 +1315,7 @@ export namespace ACP {
                       error: part.state.error,
                       metadata: part.state.metadata,
                     },
-                  },
+                  } as any,
                 })
                 .catch((err) => {
                   log.error("failed to send tool error to ACP", { error: err })
@@ -1323,6 +1331,7 @@ export namespace ACP {
                 update: {
                   sessionUpdate: message.info.role === "user" ? "user_message_chunk" : "agent_message_chunk",
                   messageId: message.info.id,
+                  timestamp,
                   content: {
                     type: "text",
                     text: part.text,
@@ -1355,6 +1364,7 @@ export namespace ACP {
                 update: {
                   sessionUpdate: messageChunk,
                   messageId: message.info.id,
+                  timestamp,
                   content: { type: "resource_link", uri: url, name: filename, mimeType: mime },
                 } as any,
               })
@@ -1377,6 +1387,7 @@ export namespace ACP {
                   update: {
                     sessionUpdate: messageChunk,
                     messageId: message.info.id,
+                    timestamp,
                     content: {
                       type: "image",
                       mimeType: effectiveMime,
@@ -1406,6 +1417,7 @@ export namespace ACP {
                   update: {
                     sessionUpdate: messageChunk,
                     messageId: message.info.id,
+                    timestamp,
                     content: { type: "resource", resource },
                   } as any,
                 })
@@ -1426,7 +1438,9 @@ export namespace ACP {
                     type: "text",
                     text: part.text,
                   },
-                },
+                  messageId,
+                  timestamp,
+                } as any,
               })
               .catch((err) => {
                 log.error("failed to send reasoning to ACP", { error: err })
@@ -1444,7 +1458,7 @@ export namespace ACP {
       return output
     }
 
-    private async toolStart(sessionId: string, part: ToolPart) {
+    private async toolStart(sessionId: string, part: ToolPart, messageId?: string, timestamp?: string) {
       if (this.toolStarts.has(part.callID)) return
       this.toolStarts.add(part.callID)
       await this.connection
@@ -1453,12 +1467,14 @@ export namespace ACP {
           update: {
             sessionUpdate: "tool_call",
             toolCallId: part.callID,
+            ...(messageId && { messageId }),
+            ...(timestamp && { timestamp }),
             title: part.tool,
             kind: toToolKind(part.tool),
             status: "pending",
             locations: [],
             rawInput: {},
-          },
+          } as any,
         })
         .catch((error) => {
           log.error("failed to send tool pending to ACP", { error })
