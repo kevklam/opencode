@@ -2,7 +2,7 @@ This is a tool for making multiple edits to a single file in one operation. It i
 
 Before using this tool:
 
-1. Use the Read tool to understand the file's contents and context
+1. Make sure the file is available as fresh context, either from the Read tool or, when context pinning is available, from injected pinned file or section context
 2. Verify the directory path is correct
 
 To make multiple file edits, provide the following:

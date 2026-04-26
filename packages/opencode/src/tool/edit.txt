@@ -1,7 +1,8 @@
 Performs exact string replacements in files. 
 
 Usage:
-- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. 
+- Before editing an existing file, make sure it is available as fresh file context. The `Read` tool provides this. If context pinning is available, injected pinned file or section context also satisfies this because pinned content is snapshotted before the turn.
+- If this tool reports that the file was not read or has changed since the last snapshot, use `Read` to refresh the file before trying again.
 - When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: line number + colon + space (e.g., `1: `). Everything after that space is the actual file content to match. Never include any part of the line number prefix in the oldString or newString.
 - ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
 - Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.

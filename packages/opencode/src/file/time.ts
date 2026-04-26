@@ -92,7 +92,11 @@ export namespace FileTime {
 
         const reads = (yield* InstanceState.get(state)).reads
         const time = reads.get(sessionID)?.get(filepath)
-        if (!time) throw new Error(`You must read file ${filepath} before overwriting it. Use the Read tool first`)
+        if (!time) {
+          throw new Error(
+            `You must read file ${filepath} or have it available as fresh pinned context before overwriting it. Use the Read tool if it is not already in pinned context.`,
+          )
+        }
 
         const next = yield* stamp(filepath)
         const changed = next.mtime !== time.mtime || next.size !== time.size

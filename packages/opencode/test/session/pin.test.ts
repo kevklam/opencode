@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
+import { FileTime } from "../../src/file/time"
 import { Instance } from "../../src/project/instance"
 import { Pin } from "../../src/session/pin"
 import { Session } from "../../src/session"
@@ -86,6 +87,28 @@ describe("session.pin", () => {
           },
         })
         expect(Pin.list(session.id)).toEqual([])
+      },
+    })
+  })
+
+  test("rendering pinned context records a fresh file read stamp", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const filepath = path.join(tmp.path, "draft.md")
+        await Bun.write(filepath, "intro\nbody\nending\n")
+
+        const session = await Session.create({})
+        Pin.pinFile({ sessionID: session.id, path: filepath })
+
+        expect(await FileTime.get(session.id, filepath)).toBeUndefined()
+
+        const rendered = await Pin.renderSystemMessage(session.id)
+        expect(rendered).toContain("intro\nbody\nending")
+        expect(await FileTime.get(session.id, filepath)).toBeInstanceOf(Date)
+        await FileTime.assert(session.id, filepath)
       },
     })
   })

@@ -7,6 +7,7 @@ import { Database, asc, eq } from "../storage/db"
 import { PinTable } from "./session.sql"
 import { Filesystem } from "@/util/filesystem"
 import { Instance } from "@/project/instance"
+import { FileTime } from "@/file/time"
 
 const MAX_PIN_BYTES = 24_000
 const MAX_TOTAL_PIN_BYTES = 60_000
@@ -255,6 +256,7 @@ export namespace Pin {
       "Use pin_file or pin_section when reference material should stay active across multiple turns.",
       "When the user asks to pin an exact file, line, or column range, call the matching pin tool directly instead of reading and manually counting content first.",
       "After pin_section succeeds, do not call read just to inspect the pinned range; use the pinned context made available to you in the next model step.",
+      "Pinned file and section context is snapshotted before each model step and counts as fresh file context for edit/write tools. Do not call read only to satisfy edit/write freshness when the relevant file content appears in the injected pinned context.",
       "pin_section line and column coordinates are 1-based and inclusive.",
       "Use list_pins to inspect the current working set and unpin when that durable context is no longer relevant.",
     ].join("\n")
@@ -269,7 +271,7 @@ export namespace Pin {
 
     for (const pin of pins) {
       if (remaining <= 0) break
-      const content = await readPinContent(pin).catch((error) => `unavailable (${String(error)})`)
+      const content = await readPinContent(sessionID, pin).catch((error) => `unavailable (${String(error)})`)
       const bounded = truncateUtf8(content, Math.min(MAX_PIN_BYTES, remaining))
       remaining -= Buffer.byteLength(bounded, "utf8")
 
@@ -315,8 +317,9 @@ export namespace Pin {
     ].join("\n\n")
   }
 
-  async function readPinContent(pin: Stored) {
+  async function readPinContent(sessionID: SessionID, pin: Stored) {
     const content = await Filesystem.readText(pin.path)
+    await FileTime.read(sessionID, pin.path)
     if (pin.kind === "file") return content
     return sliceSection(content, pin)
   }
