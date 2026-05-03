@@ -151,6 +151,7 @@ function createFakeAgent() {
   const calls = {
     eventSubscribe: 0,
     sessionCreate: 0,
+    prompt: [] as any[],
   }
 
   const sdk = {
@@ -198,6 +199,16 @@ function createFakeAgent() {
           },
         }
       },
+      prompt: async (params?: any) => {
+        calls.prompt.push(params)
+        return {
+          data: {
+            info: {
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            },
+          },
+        }
+      },
     },
     permission: {
       respond: async () => {
@@ -214,6 +225,14 @@ function createFakeAgent() {
                 name: "opencode",
                 models: {
                   "big-pickle": { id: "big-pickle", name: "big-pickle" },
+                  "small-pickle": {
+                    id: "small-pickle",
+                    name: "small-pickle",
+                    variants: {
+                      default: {},
+                      high: {},
+                    },
+                  },
                 },
               },
             ],
@@ -230,7 +249,22 @@ function createFakeAgent() {
               description: "build",
               mode: "agent",
             },
+            {
+              name: "write",
+              description: "write",
+              mode: "agent",
+            },
           ],
+        }
+      },
+      prompt: async (params?: any) => {
+        calls.prompt.push(params)
+        return {
+          data: {
+            info: {
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            },
+          },
         }
       },
     },
@@ -260,6 +294,136 @@ function createFakeAgent() {
 }
 
 describe("acp.agent event subscription", () => {
+  test("newSession inherits model variant and mode from source session", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { agent, calls, stop } = createFakeAgent()
+        const cwd = "/tmp/opencode-acp-test"
+
+        const source = await agent.newSession({ cwd, mcpServers: [] } as any).then((x) => x.sessionId)
+        await agent.setSessionConfigOption({
+          sessionId: source,
+          configId: "model",
+          value: "opencode/small-pickle/high",
+        } as any)
+        await agent.setSessionMode({ sessionId: source, modeId: "write" } as any)
+
+        const child = await agent.newSession({
+          cwd,
+          mcpServers: [],
+          _meta: { opencode: { sourceSessionId: source } },
+        } as any)
+
+        expect(child.models.currentModelId).toBe("opencode/small-pickle/high")
+        expect(child.modes?.currentModeId).toBe("write")
+        expect(child._meta?.opencode).toEqual({
+          modelId: "opencode/small-pickle",
+          variant: "high",
+          availableVariants: ["default", "high"],
+        })
+
+        await agent.prompt({
+          sessionId: child.sessionId,
+          prompt: [{ type: "text", text: "hello" }],
+        } as any)
+
+        expect(calls.prompt.at(-1)).toMatchObject({
+          sessionID: child.sessionId,
+          agent: "write",
+          model: { providerID: "opencode", modelID: "small-pickle" },
+          variant: "high",
+        })
+
+        stop()
+      },
+    })
+  })
+
+  test("loadSession preserves existing selector state for known sessions", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { agent, stop } = createFakeAgent()
+        const cwd = "/tmp/opencode-acp-test"
+
+        const sessionId = await agent.newSession({ cwd, mcpServers: [] } as any).then((x) => x.sessionId)
+        await agent.setSessionConfigOption({
+          sessionId,
+          configId: "model",
+          value: "opencode/small-pickle/high",
+        } as any)
+        await agent.setSessionMode({ sessionId, modeId: "write" } as any)
+
+        const loaded = await agent.loadSession({ sessionId, cwd, mcpServers: [] } as any)
+
+        expect(loaded.models.currentModelId).toBe("opencode/small-pickle/high")
+        expect(loaded.modes?.currentModeId).toBe("write")
+        expect(loaded.configOptions?.find((option) => option.id === "model")?.currentValue).toBe(
+          "opencode/small-pickle/high",
+        )
+        expect(loaded.configOptions?.find((option) => option.id === "mode")?.currentValue).toBe("write")
+
+        stop()
+      },
+    })
+  })
+
+  test("fresh loadSession derives selector state before building response", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { agent, sdk, stop } = createFakeAgent()
+        const cwd = "/tmp/opencode-acp-test"
+        const sessionId = "loaded_session"
+
+        sdk.session.get = async () => ({
+          data: {
+            id: sessionId,
+            time: { created: new Date().toISOString() },
+          },
+        })
+        sdk.session.messages = async () => ({
+          data: [
+            {
+              info: {
+                id: "msg_user_loaded",
+                sessionID: sessionId,
+                role: "user",
+                time: { created: Date.now() },
+                agent: "write",
+                model: {
+                  providerID: "opencode",
+                  modelID: "small-pickle",
+                  variant: "high",
+                },
+              },
+              parts: [],
+            },
+          ],
+        })
+
+        const loaded = await agent.loadSession({ sessionId, cwd, mcpServers: [] } as any)
+
+        expect(loaded.models.currentModelId).toBe("opencode/small-pickle/high")
+        expect(loaded.modes?.currentModeId).toBe("write")
+        expect(loaded.configOptions?.find((option) => option.id === "model")?.currentValue).toBe(
+          "opencode/small-pickle/high",
+        )
+        expect(loaded._meta?.opencode).toEqual({
+          modelId: "opencode/small-pickle",
+          variant: "high",
+          availableVariants: ["default", "high"],
+        })
+
+        stop()
+      },
+    })
+  })
+
   test("routes message.part.delta by the event sessionID (no cross-session pollution)", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({
@@ -628,8 +792,10 @@ describe("acp.agent event subscription", () => {
           data: [
             {
               info: {
+                id: "msg_assistant_replay",
                 role: "assistant",
                 sessionID: sessionId,
+                time: { created: Date.now() },
               },
               parts: [
                 {
