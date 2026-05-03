@@ -7,7 +7,7 @@ import { Database, asc, eq } from "../storage/db"
 import { PinTable } from "./session.sql"
 import { Filesystem } from "@/util/filesystem"
 import { Instance } from "@/project/instance"
-import { FileTime } from "@/file/time"
+import { Schema } from "effect"
 
 const MAX_PIN_BYTES = 24_000
 const MAX_TOTAL_PIN_BYTES = 60_000
@@ -40,9 +40,16 @@ export namespace Pin {
   export const Event = {
     Updated: BusEvent.define(
       "pin.updated",
-      z.object({
-        sessionID: SessionID.zod,
-        pins: z.array(Info),
+      Schema.Struct({
+        sessionID: SessionID,
+        pins: Schema.Array(
+          Schema.Struct({
+            id: Schema.String,
+            kind: Schema.Literals(["file", "section"]),
+            path: Schema.String,
+            locator: Schema.optional(Schema.String),
+          }),
+        ),
       }),
     ),
   }
@@ -319,7 +326,6 @@ export namespace Pin {
 
   async function readPinContent(sessionID: SessionID, pin: Stored) {
     const content = await Filesystem.readText(pin.path)
-    await FileTime.read(sessionID, pin.path)
     if (pin.kind === "file") return content
     return sliceSection(content, pin)
   }

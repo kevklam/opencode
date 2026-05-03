@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import path from "path"
-import { FileTime } from "../../src/file/time"
 import { Instance } from "../../src/project/instance"
 import { Pin } from "../../src/session/pin"
-import { Session } from "../../src/session"
+import { Session } from "@/session/session"
 import { tmpdir } from "../fixture/fixture"
+
+function runSession<A, E>(fx: Effect.Effect<A, E, Session.Service>) {
+  return Effect.runPromise(fx.pipe(Effect.provide(Session.defaultLayer)))
+}
 
 describe("session.pin", () => {
   test("stores and lists durable file and section pins", async () => {
@@ -16,7 +20,7 @@ describe("session.pin", () => {
         const filepath = path.join(tmp.path, "notes.txt")
         await Bun.write(filepath, "alpha\nbeta\ngamma\ndelta\n")
 
-        const session = await Session.create({})
+        const session = await runSession(Session.Service.use((svc) => svc.create({})))
         const filePin = Pin.pinFile({ sessionID: session.id, path: filepath })
         const sectionPin = Pin.pinSection({
           sessionID: session.id,
@@ -60,7 +64,7 @@ describe("session.pin", () => {
         const filepath = path.join(tmp.path, "guide.md")
         await Bun.write(filepath, "# Guide\nLine two\nLine three\n")
 
-        const session = await Session.create({})
+        const session = await runSession(Session.Service.use((svc) => svc.create({})))
         const { pinID } = Pin.pinSection({
           sessionID: session.id,
           path: filepath,
@@ -91,25 +95,4 @@ describe("session.pin", () => {
     })
   })
 
-  test("rendering pinned context records a fresh file read stamp", async () => {
-    await using tmp = await tmpdir({ git: true })
-
-    await Instance.provide({
-      directory: tmp.path,
-      fn: async () => {
-        const filepath = path.join(tmp.path, "draft.md")
-        await Bun.write(filepath, "intro\nbody\nending\n")
-
-        const session = await Session.create({})
-        Pin.pinFile({ sessionID: session.id, path: filepath })
-
-        expect(await FileTime.get(session.id, filepath)).toBeUndefined()
-
-        const rendered = await Pin.renderSystemMessage(session.id)
-        expect(rendered).toContain("intro\nbody\nending")
-        expect(await FileTime.get(session.id, filepath)).toBeInstanceOf(Date)
-        await FileTime.assert(session.id, filepath)
-      },
-    })
-  })
 })

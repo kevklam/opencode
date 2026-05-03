@@ -928,10 +928,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           time: { created: Date.now() },
           agent: ag.name,
           model,
-          path: {
-            cwd: ctx.directory,
-            root: ctx.worktree,
-          },
         }
         yield* sessions.updateMessage(anchor)
         yield* sessions.updatePart({
@@ -947,6 +943,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const greeting: MessageV2.Assistant = {
           id: MessageID.ascending(),
           sessionID: input.sessionID,
+          role: "assistant",
           parentID: anchor.id,
           mode: ag.name,
           agent: ag.name,

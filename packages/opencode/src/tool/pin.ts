@@ -4,6 +4,7 @@ import * as Tool from "./tool"
 import { Pin } from "../session/pin"
 import { InstanceState } from "@/effect/instance-state"
 import { Filesystem } from "@/util/filesystem"
+import { PositiveInt } from "@/util/schema"
 
 function describePinTarget(worktree: string, pin: Pin.Info) {
   const relative = path.relative(worktree, pin.path)
@@ -57,16 +58,16 @@ export const PinSectionTool = Tool.define(
       description: `${PIN_TOOL_DESCRIPTION}\n\nPin a line range from a file into durable per-session context. Lines and columns are 1-based and inclusive.`,
       parameters: Schema.Struct({
         path: Schema.String.annotate({ description: "Absolute or workspace-relative path to the file to pin" }),
-        start_line: Schema.Number.pipe(Schema.int(), Schema.positive()).annotate({
+        start_line: PositiveInt.annotate({
           description: "1-based inclusive start line",
         }),
-        start_column: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())).annotate({
+        start_column: Schema.optional(PositiveInt).annotate({
           description: "1-based inclusive start column",
         }),
-        end_line: Schema.Number.pipe(Schema.int(), Schema.positive()).annotate({
+        end_line: PositiveInt.annotate({
           description: "1-based inclusive end line",
         }),
-        end_column: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.positive())).annotate({
+        end_column: Schema.optional(PositiveInt).annotate({
           description: "1-based inclusive end column",
         }),
       }),
