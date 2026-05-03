@@ -71,7 +71,8 @@ type RetrySessionRequest = { sessionId: string; messageId: string }
 type RetrySessionResponse = {
   sessionId: string
   sourceMessageId: string
-  retriedUserMessageId: string
+  originalBackendUserMessageId: string
+  retriedBackendUserMessageId?: string
   stopReason: "end_turn" | "cancelled"
 }
 type RewriteMessageRequest = { sessionId: string; messageId: string; content: string }
@@ -992,14 +993,14 @@ export class Agent implements ACPAgent {
       .then((x) => x.data)
 
     const sourceMessage = source.info
-    const retriedUserMessageId =
+    const originalBackendUserMessageId =
       sourceMessage.role === "assistant"
         ? sourceMessage.parentID
         : sourceMessage.role === "user"
           ? sourceMessage.id
           : undefined
 
-    if (!retriedUserMessageId) {
+    if (!originalBackendUserMessageId) {
       throw new Error(`Retry requires a user or assistant message: ${params.messageId}`)
     }
 
@@ -1007,7 +1008,7 @@ export class Agent implements ACPAgent {
       .message(
         {
           sessionID: params.sessionId,
-          messageID: retriedUserMessageId,
+          messageID: originalBackendUserMessageId,
           directory: session.cwd,
         },
         { throwOnError: true },
@@ -1015,7 +1016,7 @@ export class Agent implements ACPAgent {
       .then((x) => x.data)
 
     if (original.info.role !== "user") {
-      throw new Error(`Retry target did not resolve to a user message: ${retriedUserMessageId}`)
+      throw new Error(`Retry target did not resolve to a user message: ${originalBackendUserMessageId}`)
     }
 
     await this.sdk.session.revert(
@@ -1051,7 +1052,7 @@ export class Agent implements ACPAgent {
     const retryVariant = this.sessionManager.getVariant(params.sessionId)
 
     try {
-      await this.sdk.session.prompt(
+      const response = await this.sdk.session.prompt(
         {
           sessionID: params.sessionId,
           directory: session.cwd,
@@ -1065,6 +1066,14 @@ export class Agent implements ACPAgent {
         },
         { throwOnError: true },
       )
+      const retriedBackendUserMessageId = response.data?.info.parentID
+      return {
+        sessionId: params.sessionId,
+        sourceMessageId: params.messageId,
+        originalBackendUserMessageId,
+        retriedBackendUserMessageId,
+        stopReason: "end_turn",
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
       if (!message.includes("cancel")) {
@@ -1073,16 +1082,9 @@ export class Agent implements ACPAgent {
       return {
         sessionId: params.sessionId,
         sourceMessageId: params.messageId,
-        retriedUserMessageId,
+        originalBackendUserMessageId,
         stopReason: "cancelled",
       }
-    }
-
-    return {
-      sessionId: params.sessionId,
-      sourceMessageId: params.messageId,
-      retriedUserMessageId,
-      stopReason: "end_turn",
     }
   }
 
@@ -1883,8 +1885,9 @@ export class Agent implements ACPAgent {
 
       return {
         stopReason: "end_turn" as const,
+        userMessageId: params.messageId,
         usage: msg ? buildUsage(msg) : undefined,
-        _meta: {},
+        _meta: { opencode: { backendUserMessageId: msg?.parentID } },
       }
     }
 
@@ -1906,8 +1909,9 @@ export class Agent implements ACPAgent {
 
       return {
         stopReason: "end_turn" as const,
+        userMessageId: params.messageId,
         usage: msg ? buildUsage(msg) : undefined,
-        _meta: {},
+        _meta: { opencode: { backendUserMessageId: msg?.parentID } },
       }
     }
 
