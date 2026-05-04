@@ -77,6 +77,7 @@ type RetrySessionResponse = {
 }
 type RewriteMessageRequest = { sessionId: string; messageId: string; content: string }
 type RewriteMessageResponse = { sessionId: string; messageId: string }
+type FirstMessageChangedParams = { sessionId: string; agentId?: string; firstMessage: string | null }
 type PinUpdatedEvent = {
   type: "pin.updated"
   properties: {
@@ -694,6 +695,7 @@ export class Agent implements ACPAgent {
         mcpServers: params.mcpServers,
         sessionId,
       })
+      await this.emitFirstMessageChanged(sessionId)
 
       return {
         sessionId,
@@ -755,6 +757,7 @@ export class Agent implements ACPAgent {
         mcpServers: params.mcpServers,
         sessionId,
       })
+      await this.emitFirstMessageChanged(sessionId)
 
       for (const msg of messages ?? []) {
         log.debug("replay message", msg)
@@ -966,6 +969,7 @@ export class Agent implements ACPAgent {
     )
     const reverted = await AppRuntime.runPromise(Session.Service.use((svc) => svc.get(SessionID.make(params.sessionId))))
     await AppRuntime.runPromise(SessionRevert.Service.use((svc) => svc.cleanup(reverted)))
+    await this.emitFirstMessageChanged(params.sessionId)
     return { sessionId: params.sessionId, messageId: params.messageId }
   }
 
@@ -1588,6 +1592,46 @@ export class Agent implements ACPAgent {
     }
   }
 
+  private async emitFirstMessageChanged(sessionId: string): Promise<void> {
+    const session = this.sessionManager.get(sessionId)
+    const directory = session.cwd
+    const [messages, agents] = await Promise.all([
+      this.sdk.session
+        .messages({ sessionID: sessionId, directory }, { throwOnError: true })
+        .then((x) => x.data ?? [])
+        .catch((error) => {
+          log.error("failed to load session messages for first_message preview", { sessionId, error })
+          return []
+        }),
+      this.config.sdk.app
+        .agents({ directory }, { throwOnError: true })
+        .then((x) => x.data ?? [])
+        .catch((error) => {
+          log.error("failed to load agents for first_message preview", { sessionId, error })
+          return []
+        }),
+    ])
+
+    const agentId =
+      session.modeId ?? (await AppRuntime.runPromise(AgentModule.Service.use((svc) => svc.defaultAgent())).catch(() => undefined))
+    const firstMessage =
+      messages.length === 0
+        ? ((agentId
+            ? (agents.find((agent) => agent.name === agentId) as { firstMessage?: string } | undefined)?.firstMessage
+            : undefined) ?? null)
+        : null
+
+    await this.connection
+      .extNotification("_opencode/session/first_message_changed", {
+        sessionId,
+        agentId,
+        firstMessage,
+      } satisfies FirstMessageChangedParams)
+      .catch((error) => {
+        log.error("failed to send first_message change notification", { sessionId, error })
+      })
+  }
+
   private async loadSessionMode(params: LoadSessionRequest) {
     const directory = params.cwd
     const sessionId = params.sessionId
@@ -1737,6 +1781,7 @@ export class Agent implements ACPAgent {
       throw new Error(`Agent not found: ${params.modeId}`)
     }
     this.sessionManager.setMode(params.sessionId, params.modeId)
+    await this.emitFirstMessageChanged(params.sessionId)
   }
 
   async setSessionConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
@@ -1758,6 +1803,7 @@ export class Agent implements ACPAgent {
         throw RequestError.invalidParams(JSON.stringify({ error: `Mode not found: ${params.value}` }))
       }
       this.sessionManager.setMode(session.id, params.value)
+      await this.emitFirstMessageChanged(session.id)
     } else {
       throw RequestError.invalidParams(JSON.stringify({ error: `Unknown config option: ${params.configId}` }))
     }

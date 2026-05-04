@@ -257,6 +257,7 @@ function createFakeAgent() {
               name: "write",
               description: "write",
               mode: "agent",
+              firstMessage: "Ready to write.",
             },
           ],
         }
@@ -430,6 +431,31 @@ describe("acp.agent event subscription", () => {
     })
   })
 
+  test("emits first message preview when session mode changes", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { agent, extNotifications, stop } = createFakeAgent()
+        const cwd = "/tmp/opencode-acp-test"
+
+        const sessionId = await agent.newSession({ cwd, mcpServers: [] } as any).then((x) => x.sessionId)
+        await agent.setSessionMode({ sessionId, modeId: "write" } as any)
+
+        expect(extNotifications).toContainEqual({
+          method: "_opencode/session/first_message_changed",
+          params: {
+            sessionId,
+            agentId: "write",
+            firstMessage: "Ready to write.",
+          },
+        })
+
+        stop()
+      },
+    })
+  })
+
   test("routes message.part.delta by the event sessionID (no cross-session pollution)", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({
@@ -486,15 +512,13 @@ describe("acp.agent event subscription", () => {
 
         await new Promise((r) => setTimeout(r, 20))
 
-        expect(extNotifications).toEqual([
-          {
-            method: "_opencode/pins/changed",
-            params: {
-              sessionId,
-              pins: [{ id: "pin_1", kind: "file", path: "/tmp/story.md" }],
-            },
+        expect(extNotifications).toContainEqual({
+          method: "_opencode/pins/changed",
+          params: {
+            sessionId,
+            pins: [{ id: "pin_1", kind: "file", path: "/tmp/story.md" }],
           },
-        ])
+        })
 
         await stop()
       },
