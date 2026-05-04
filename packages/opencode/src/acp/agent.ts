@@ -77,6 +77,14 @@ type RetrySessionResponse = {
 }
 type RewriteMessageRequest = { sessionId: string; messageId: string; content: string }
 type RewriteMessageResponse = { sessionId: string; messageId: string }
+type PinUpdatedEvent = {
+  type: "pin.updated"
+  properties: {
+    sessionID: SessionID
+    pins: Pin.Info[]
+  }
+}
+type ACPBridgeEvent = Event | PinUpdatedEvent
 const decodeTodos = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Array(Todo.Info)))
 
 const DEFAULT_VARIANT_VALUE = "default"
@@ -221,14 +229,14 @@ export class Agent implements ACPAgent {
         if (this.eventAbort.signal.aborted) return
         const payload = event?.payload
         if (!payload) continue
-        await this.handleEvent(payload as Event).catch((error) => {
+        await this.handleEvent(payload as ACPBridgeEvent).catch((error) => {
           log.error("failed to handle event", { error, type: payload.type })
         })
       }
     }
   }
 
-  private async handleEvent(event: Event) {
+  private async handleEvent(event: ACPBridgeEvent) {
     switch (event.type) {
       case "permission.asked": {
         const permission = event.properties
@@ -567,6 +575,22 @@ export class Agent implements ACPAgent {
               log.error("failed to send reasoning delta to ACP", { error })
             })
         }
+        return
+      }
+
+      case "pin.updated": {
+        const props = event.properties
+        const session = this.sessionManager.tryGet(props.sessionID)
+        if (!session) return
+
+        await this.connection
+          .extNotification("_opencode/pins/changed", {
+            sessionId: session.id,
+            pins: props.pins,
+          })
+          .catch((error) => {
+            log.error("failed to send pins changed notification", { error })
+          })
         return
       }
     }
@@ -1679,6 +1703,7 @@ export class Agent implements ACPAgent {
         model,
         variant: this.sessionManager.getVariant(sessionId),
         availableVariants,
+        pins: Pin.list(SessionID.make(sessionId)),
       }),
     }
   }
@@ -2172,12 +2197,14 @@ function buildVariantMeta(input: {
   model: { providerID: ProviderID; modelID: ModelID }
   variant?: string
   availableVariants: string[]
+  pins?: Pin.Info[]
 }) {
   return {
     opencode: {
       modelId: `${input.model.providerID}/${input.model.modelID}`,
       variant: input.variant ?? null,
       availableVariants: input.availableVariants,
+      ...(input.pins ? { pins: input.pins } : {}),
     },
   }
 }

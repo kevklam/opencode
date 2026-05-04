@@ -123,6 +123,7 @@ function createFakeAgent() {
   const updates = new Map<string, string[]>()
   const chunks = new Map<string, string>()
   const sessionUpdates: SessionUpdateParams[] = []
+  const extNotifications: Array<{ method: string; params: Record<string, unknown> }> = []
   const record = (sessionId: string, type: string) => {
     const list = updates.get(sessionId) ?? []
     list.push(type)
@@ -144,6 +145,9 @@ function createFakeAgent() {
     },
     async requestPermission(_params: RequestPermissionParams): Promise<RequestPermissionResult> {
       return { outcome: { outcome: "selected", optionId: "once" } } as RequestPermissionResult
+    },
+    async extNotification(method: string, params: Record<string, unknown>) {
+      extNotifications.push({ method, params })
     },
   } as unknown as AgentSideConnection
 
@@ -290,7 +294,7 @@ function createFakeAgent() {
     ;(agent as any).eventAbort.abort()
   }
 
-  return { agent, controller, calls, updates, chunks, sessionUpdates, stop, sdk, connection }
+  return { agent, controller, calls, updates, chunks, sessionUpdates, extNotifications, stop, sdk, connection }
 }
 
 describe("acp.agent event subscription", () => {
@@ -322,6 +326,7 @@ describe("acp.agent event subscription", () => {
           modelId: "opencode/small-pickle",
           variant: "high",
           availableVariants: ["default", "high"],
+          pins: [],
         })
 
         await agent.prompt({
@@ -417,6 +422,7 @@ describe("acp.agent event subscription", () => {
           modelId: "opencode/small-pickle",
           variant: "high",
           availableVariants: ["default", "high"],
+          pins: [],
         })
 
         stop()
@@ -455,6 +461,42 @@ describe("acp.agent event subscription", () => {
         expect((updates.get(sessionB) ?? []).includes("agent_message_chunk")).toBe(true)
 
         stop()
+      },
+    })
+  })
+
+  test("emits OpenCode pin change notifications", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const cwd = "/tmp/opencode-acp-test"
+        const { agent, controller, extNotifications, stop } = createFakeAgent()
+        const sessionId = await agent.newSession({ cwd, mcpServers: [] } as any).then((x) => x.sessionId)
+
+        controller.push({
+          payload: {
+            type: "pin.updated",
+            properties: {
+              sessionID: sessionId,
+              pins: [{ id: "pin_1", kind: "file", path: "/tmp/story.md" }],
+            },
+          } as any,
+        })
+
+        await new Promise((r) => setTimeout(r, 20))
+
+        expect(extNotifications).toEqual([
+          {
+            method: "_opencode/pins/changed",
+            params: {
+              sessionId,
+              pins: [{ id: "pin_1", kind: "file", path: "/tmp/story.md" }],
+            },
+          },
+        ])
+
+        await stop()
       },
     })
   })
